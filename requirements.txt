@@ -1,0 +1,9 @@
+# Streamlit Community Cloud installs from this file. Streamlit is pinned because the
+# custom styling in ui.py targets this version's page structure; the rest are capped
+# below the next major version so a deploy can't pick up breaking changes.
+streamlit==1.52.1
+numpy>=2.0,<3
+pandas>=2.2,<3
+scipy>=1.13,<2
+plotly>=5.20,<7
+yfinance>=0.2.50

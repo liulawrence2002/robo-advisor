@@ -1,0 +1,35 @@
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+base = "light"
+primaryColor = "#1E4D40"
+backgroundColor = "#F6F2E9"
+secondaryBackgroundColor = "#EFE8DA"
+textColor = "#18222F"
+linkColor = "#1E4D40"
+borderColor = "#DCD3C1"
+dataframeBorderColor = "#E6DFD1"
+dataframeHeaderBackgroundColor = "#F1EBDF"
+showWidgetBorder = true
+showSidebarBorder = false
+baseRadius = "8px"
+buttonRadius = "6px"
+baseFontSize = 15
+font = "'Hanken Grotesk':https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@300;400;500;600;700&display=swap"
+headingFont = "Newsreader:https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap"
+codeFont = "'IBM Plex Mono':https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+
+[theme.sidebar]
+backgroundColor = "#14202C"
+secondaryBackgroundColor = "#1C2B3A"
+textColor = "#E9E3D6"
+primaryColor = "#C9A55C"
+borderColor = "#2E4051"
+linkColor = "#C9A55C"
