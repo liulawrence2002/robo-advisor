@@ -397,7 +397,7 @@ def run(p: ClientProfile, rp: RiskProfile, cfg: SimConfig | None = None, cma: CM
 
 
 def sustainable_spending(p: ClientProfile, rp: RiskProfile, target: float = 0.85, cfg: SimConfig | None = None,
-                         cma: CMA | None = None, iters: int = 14) -> float:
+                         cma: CMA | None = None, iters: int = 10) -> float:
     """Highest real retirement spending that is paid in full, with no cut, in `target` of paths
     (bisection with common random numbers). Measured with fixed real spending so the figure is
     not flattered by guardrail cuts."""

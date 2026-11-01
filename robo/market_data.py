@@ -55,7 +55,7 @@ FALLBACK = {
 def _yf():
     import yfinance as yf
     try:
-        yf.config.network.retries = 2
+        yf.config.network.retries = 0      # fail fast on shared cloud IPs that Yahoo throttles; fallbacks take over
     except Exception:
         pass
     return yf
@@ -268,7 +268,7 @@ def fred(ids: list[str], start: str = "2024-01-01") -> dict | None:
     try:
         from curl_cffi import requests as crq
         r = crq.get("https://fred.stlouisfed.org/graph/fredgraph.csv", params={"id": ",".join(ids), "cosd": start},
-                    impersonate="chrome", timeout=30)
+                    impersonate="chrome", timeout=12)
         r.raise_for_status()
         raw = r.content
 
@@ -294,7 +294,7 @@ def treasury_curve(real: bool = False) -> dict | None:
            f"{year}/all?type={kind}&field_tdr_date_value={year}&page&_format=csv")
     try:
         import requests
-        r = requests.get(url, headers=UA, timeout=20)
+        r = requests.get(url, headers=UA, timeout=10)
         r.raise_for_status()
         df = pd.read_csv(io.StringIO(r.text))
         row = df.iloc[0]
@@ -310,7 +310,7 @@ def treasury_curve(real: bool = False) -> dict | None:
 def multpl_table(slug: str) -> tuple[float, str] | None:
     try:
         import requests
-        r = requests.get(f"https://www.multpl.com/{slug}/table/by-month", headers=UA, timeout=20)
+        r = requests.get(f"https://www.multpl.com/{slug}/table/by-month", headers=UA, timeout=10)
         r.raise_for_status()
         df = pd.read_html(io.StringIO(r.text))[0]
         val = str(df.iloc[0, 1]).replace("†", "").replace("%", "").strip()
@@ -322,7 +322,7 @@ def multpl_table(slug: str) -> tuple[float, str] | None:
 def damodaran_erp() -> dict | None:
     try:
         import requests
-        r = requests.get("https://pages.stern.nyu.edu/~adamodar/pc/implprem/ERPbymonth.xlsx", headers=UA, timeout=30)
+        r = requests.get("https://pages.stern.nyu.edu/~adamodar/pc/implprem/ERPbymonth.xlsx", headers=UA, timeout=15)
         r.raise_for_status()
         df = pd.read_excel(io.BytesIO(r.content), sheet_name="Historical ERP", header=0)
         cols = {str(c).strip(): c for c in df.columns}
@@ -337,13 +337,13 @@ def damodaran_erp() -> dict | None:
         return None
 
 
-def cboe_put_call(max_back: int = 7) -> dict | None:
+def cboe_put_call(max_back: int = 4) -> dict | None:
     try:
         import requests
         d = dt.date.today()
         for _ in range(max_back):
             r = requests.get(f"https://cdn.cboe.com/data/us/options/market_statistics/daily/{d:%Y-%m-%d}_daily_options",
-                             headers=UA, timeout=15)
+                             headers=UA, timeout=6)
             if r.ok:
                 j = r.json()
                 out = {x["name"].replace(" PUT/CALL RATIO", "").replace("CBOE VOLATILITY INDEX (VIX)", "VIX"): float(x["value"])
@@ -359,7 +359,7 @@ def cboe_put_call(max_back: int = 7) -> dict | None:
 def fear_greed() -> dict | None:
     try:
         import requests
-        r = requests.get("https://production.dataviz.cnn.io/index/fearandgreed/graphdata", headers=UA, timeout=15)
+        r = requests.get("https://production.dataviz.cnn.io/index/fearandgreed/graphdata", headers=UA, timeout=8)
         r.raise_for_status()
         fg = r.json()["fear_and_greed"]
         return {"score": float(fg["score"]), "rating": fg["rating"], "previous_1_week": float(fg["previous_1_week"]),

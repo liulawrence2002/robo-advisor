@@ -90,10 +90,16 @@ def get_macro(use_live: bool) -> dict:
 
 @st.cache_data(show_spinner=False, max_entries=48)
 def cached_advice(profile_json: str, cfg_json: str, market_json: str, prices_json: str,
-                  stock_vol: float | None, stock_info_json: str) -> Recommendation:
+                  stock_vol: float | None, stock_info_json: str, light: bool = False) -> Recommendation:
+    """light=True (the Compare section) skips the scenario replays and overlay simulation and caps the
+    path count, so the three side-by-side cases do not triple the first-load time on a shared server."""
     p = profile_from_dict(json.loads(profile_json))
-    return advise(p, Market(**json.loads(market_json)), SimConfig(**json.loads(cfg_json)), prices=json.loads(prices_json),
-                  stock_vol=stock_vol, stock_info=json.loads(stock_info_json) or None)
+    cfg = SimConfig(**json.loads(cfg_json))
+    if light:
+        cfg.n_paths = min(cfg.n_paths, 1500)
+    return advise(p, Market(**json.loads(market_json)), cfg, prices=json.loads(prices_json),
+                  stock_vol=stock_vol, stock_info=json.loads(stock_info_json) or None,
+                  with_scenarios=not light, with_overlay_sim=not light)
 
 
 @st.cache_data(show_spinner=False)
@@ -455,7 +461,8 @@ cfg = SimConfig(n_paths=int(n_paths), seed=int(seed), fat_tails=fat, spending_ru
 idx = get_indices(use_live)
 market = Market(spot=idx["^GSPC"], vix=idx.get("^VIX"), rate=idx.get("^IRX", 3.97) / 100, live=idx["live"], asof=idx["asof"])
 mkt_dict = dataclasses.asdict(market)
-prices = get_prices(use_live)
+yahoo_ok = use_live and bool(idx["live"])     # if the first Yahoo call failed (throttled IP), skip the rest
+prices = get_prices(yahoo_ok)
 ui.topbar(market.spot, market.vix, market.rate, market.live)
 ui.page_runtime()           # near the top: Streamlit lazy-loads component frames, so it must start in view
 hero_slot = st.container()
@@ -467,7 +474,7 @@ ui.section("Client profile", "Seven short steps: the same information a bank col
 profile = kyc_form(choice)
 
 # live single-stock data for the concentrated position (implied vol prices the collar; shares/volume for Rule 144)
-stock = get_stock(profile.finances.concentrated_ticker) if (use_live and profile.finances.concentrated_ticker and
+stock = get_stock(profile.finances.concentrated_ticker) if (yahoo_ok and profile.finances.concentrated_ticker and
                                                            profile.finances.concentrated_stock > 0) else None
 stock_vol = stock.get("implied_vol") if stock else None
 stock_info = {"shares_outstanding": stock.get("shares_outstanding"), "price": stock.get("price"),
@@ -948,7 +955,7 @@ else:
                 for n_ in notes_:
                     st.markdown(f"- {n_}")
 
-    chain = get_chain("SPY", market.rate) if use_live else None
+    chain = get_chain("SPY", market.rate) if yahoo_ok else None
     ui.subsection("Listed market vs the model", "Implied volatilities recomputed from bid/ask mid-prices of SPY options at about "
                   "3, 6 and 12 months, compared with the model's skew σ(K) = σ_ATM − 0.30·ln(K/S).")
     if chain:
@@ -997,8 +1004,9 @@ else:
                    (f" · SKEW {idx['^SKEW']:.0f}" if idx.get("^SKEW") else "") +
                    ". ATM term structure from the chain: " + " · ".join(f"{d_} {v_:.1%}" for d_, v_ in term) + ".")
     else:
-        ui.notes(["Live option chain unavailable (offline mode or Yahoo throttling). The model skew is used for all pricing."],
-                 kind="Chain", tone="info")
+        ui.notes(["Live option chain unavailable (offline mode, or Yahoo Finance is throttling this server's shared IP). "
+                  "The model skew and the committed market snapshot are used for all pricing; turn Live market data off and on "
+                  "again later to retry."], kind="Chain", tone="info")
 
     if plan.futures:
         fu = plan.futures
@@ -1173,7 +1181,7 @@ for k_, fn in CASES.items():
     pk_ = fn()
     sv_ = stock_vol if (stock and pk_.finances.concentrated_ticker == stock.get("ticker")) else None
     si_ = stock_info if sv_ is not None else {}
-    recs[k_] = cached_advice(json.dumps(pk_.to_dict()), cfg_json, json.dumps(mkt_dict), json.dumps(prices), sv_, json.dumps(si_))
+    recs[k_] = cached_advice(json.dumps(pk_.to_dict()), cfg_json, json.dumps(mkt_dict), json.dumps(prices), sv_, json.dumps(si_), light=True)
 cards = []
 for k_, r_ in recs.items():
     t_, v_ = ui.verdict_for(r_.sim.success)
