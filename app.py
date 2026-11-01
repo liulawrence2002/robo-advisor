@@ -439,7 +439,7 @@ with st.container(key="controls"):
                          help="S&P 500, VIX term structure, Treasury yields, option chains, ETF prices, stock fundamentals and "
                               "macro valuation inputs. Long-term return assumptions never come from live prices.")
     with c3.popover("Simulation settings", width="stretch"):
-        n_paths = st.select_slider("Market scenarios", [1000, 2000, 3000, 5000, 10000], value=3000)
+        n_paths = st.select_slider("Market scenarios", [1000, 2000, 3000, 5000, 10000], value=2000)
         spending_rule = st.radio("Retirement spending", ["guardrails", "fixed"],
                                  format_func=lambda s: "Guardrails (adjusts with markets)" if s == "guardrails" else "Fixed in real terms")
         ss_short = st.checkbox("Social Security trust-fund cut (78% from 2033)", value=True)
@@ -457,7 +457,7 @@ market = Market(spot=idx["^GSPC"], vix=idx.get("^VIX"), rate=idx.get("^IRX", 3.9
 mkt_dict = dataclasses.asdict(market)
 prices = get_prices(use_live)
 ui.topbar(market.spot, market.vix, market.rate, market.live)
-ui.anime_runtime()          # near the top: Streamlit lazy-loads component frames, so it must start in view
+ui.page_runtime()           # near the top: Streamlit lazy-loads component frames, so it must start in view
 hero_slot = st.container()
 
 # ------------------------------------------------------------------------ 01 Profile

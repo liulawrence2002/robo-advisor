@@ -1,12 +1,12 @@
-"""Visual system for the robo-advisor app: palette, CSS, HTML components, anime.js runtime and the
+"""Visual system for the robo-advisor app: palette, CSS, HTML components, page runtime and the
 Plotly template.
 
 Direction: a single-scroll editorial page in the manner of modern minimalist product sites. Bone
 white canvas, ink type, one accent (keel green) with amber and red reserved for signals. Instrument
 Serif for display lines and big figures, Instrument Sans for reading, JetBrains Mono for numbers
 and labels. A fixed top bar with a scroll-progress line and section links; numbered sections with
-oversized faint numerals; cards on hairlines. Motion: a staggered hero reveal, count-up figures and
-scroll-triggered reveals driven by anime.js, nothing decorative beyond that.
+faint numerals; cards on hairlines; a tight, consistent spacing scale. No animation library: the only
+script highlights the section in view and draws the scroll-progress line.
 """
 from __future__ import annotations
 
@@ -54,7 +54,9 @@ header[data-testid="stHeader"], [data-testid="stAppDeployButton"]{display:none !
 [data-testid="stAppViewContainer"]{background:
   radial-gradient(1200px 500px at 85% -10%, rgba(14,107,82,.07), transparent 60%),
   radial-gradient(900px 500px at -10% 20%, rgba(176,122,23,.05), transparent 55%), var(--paper);}
-[data-testid="stMainBlockContainer"]{max-width:1200px; padding:calc(var(--tb) + 1.2rem) 2.4rem 7rem;}
+[data-testid="stMainBlockContainer"]{max-width:1200px; padding:calc(var(--tb) + .9rem) 2.4rem 4rem;}
+[data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"]{gap:.7rem;}
+[data-stale="true"]{opacity:.65 !important; transition:opacity .25s ease;}
 .stMainBlockContainer p, .stMainBlockContainer li{line-height:1.6;}
 h1, h2, h3, h4{font-family:var(--serif) !important; font-weight:400 !important; letter-spacing:-.01em; color:var(--ink);}
 [data-testid="stCaptionContainer"]{color:var(--muted);}
@@ -85,7 +87,8 @@ html{scroll-behavior:smooth;}
 @media (max-width:760px){.tb-nav{display:none;}}
 
 /* ---------- controls strip ---------- */
-[class*="st-key-controls"]{background:var(--card); border:1px solid var(--hair); border-radius:14px; padding:.7rem 1rem .5rem; box-shadow:var(--shadow);}
+[class*="st-key-controls"]{background:var(--card); border:1px solid var(--hair); border-radius:14px; padding:.75rem 1.1rem .85rem; box-shadow:var(--shadow);}
+[class*="st-key-controls"] [data-testid="stVerticalBlock"]{gap:.35rem;}
 [class*="st-key-controls"] [data-testid="stRadio"] [role="radiogroup"]{gap:.35rem; flex-wrap:wrap;}
 [class*="st-key-controls"] [data-testid="stRadio"] label[data-baseweb="radio"]{margin:0; padding:.42rem .9rem; border:1px solid var(--hair);
   border-radius:999px; background:var(--paper); transition:all .15s ease; cursor:pointer;}
@@ -95,7 +98,7 @@ html{scroll-behavior:smooth;}
 [class*="st-key-controls"] [data-testid="stRadio"] label[data-baseweb="radio"] > div:first-child{display:none;}
 [class*="st-key-controls"] [data-testid="stRadio"] label p{font-size:.84rem; font-weight:500; color:var(--ink2);}
 [class*="st-key-controls"] [data-testid="stPopover"] button, [class*="st-key-controls"] .stButton button{border-radius:999px; font-weight:500;}
-[class*="st-key-controls"] [data-testid="stCaptionContainer"] p{margin:0;}
+[class*="st-key-controls"] [data-testid="stCaptionContainer"]{margin:0;} [class*="st-key-controls"] [data-testid="stCaptionContainer"] p{margin:0; font-size:.8rem;}
 
 /* ---------- intake stepper (tabs inside the profile section) ---------- */
 .stTabs [data-baseweb="tab-list"]{gap:.45rem; border-bottom:none; flex-wrap:wrap; background:transparent;}
@@ -108,9 +111,8 @@ html{scroll-behavior:smooth;}
 .stTabs [data-baseweb="tab-panel"]{padding-top:1rem;}
 
 /* ---------- cards ---------- */
-[class*="st-key-card_"]{background:var(--card); border:1px solid var(--hair); border-radius:14px; padding:1.15rem 1.35rem 1.25rem;
-  box-shadow:var(--shadow); transition:transform .2s ease, box-shadow .2s ease;}
-[class*="st-key-card_"]:hover{box-shadow:0 1px 0 rgba(16,20,24,.02), 0 26px 50px -34px rgba(16,20,24,.38);}
+[class*="st-key-card_"]{background:var(--card); border:1px solid var(--hair); border-radius:12px; padding:1rem 1.2rem 1.1rem;
+  box-shadow:var(--shadow);}
 [class*="st-key-card_"] [data-testid="stPlotlyChart"]{margin-top:-.2rem;}
 [data-testid="stExpander"] details{background:var(--card); border:1px solid var(--hair); border-radius:12px;}
 [data-testid="stExpander"] summary p{font-weight:600; color:var(--ink2);}
@@ -121,21 +123,21 @@ div[data-baseweb="slider"] [role="slider"]{box-shadow:0 0 0 4px rgba(14,107,82,.
 [data-testid="stPlotlyChart"]{background:transparent;}
 
 /* ---------- hero ---------- */
-.hero{padding:1.6rem 0 2.2rem; border-bottom:1px solid var(--hair); margin-bottom:.4rem;}
+.hero{padding:1.1rem 0 1.5rem; border-bottom:1px solid var(--hair);}
 .eyebrow{font-family:var(--mono); font-size:.68rem; letter-spacing:.2em; text-transform:uppercase; color:var(--green);}
-.hero-title{font-family:var(--serif); font-weight:400; font-size:clamp(2.6rem, 5vw, 4.4rem); line-height:1.02; letter-spacing:-.025em;
-  color:var(--ink); margin:.6rem 0 1rem; max-width:18ch;}
+.hero-title{font-family:var(--serif); font-weight:400; font-size:clamp(2.3rem, 4vw, 3.5rem); line-height:1.04; letter-spacing:-.02em;
+  color:var(--ink); margin:.45rem 0 .8rem; max-width:22ch;}
 .hero-title em{font-style:italic; color:var(--green);}
 .hero-title .w{display:inline-block; white-space:pre;}
-.hero-grid{display:grid; grid-template-columns:1.35fr .9fr; gap:2.5rem; align-items:end;}
+.hero-grid{display:grid; grid-template-columns:1.4fr .8fr; gap:2rem; align-items:center;}
 @media (max-width:900px){.hero-grid{grid-template-columns:1fr;}}
-.hero-sub{color:var(--ink2); font-size:1.08rem; max-width:60ch; margin:0 0 1.1rem;}
+.hero-sub{color:var(--ink2); font-size:1rem; max-width:62ch; margin:0 0 .8rem;}
 .chips{display:flex; flex-wrap:wrap; gap:.4rem;}
 .chip{font-size:.76rem; color:var(--ink2); background:var(--card); border:1px solid var(--hair); border-radius:999px; padding:.24rem .7rem;}
 .chip b{font-family:var(--mono); font-weight:500; color:var(--ink);}
-.hero-num{display:flex; flex-direction:column; align-items:flex-start; gap:.4rem; border-left:1px solid var(--hair); padding-left:2rem;}
+.hero-num{display:flex; flex-direction:column; align-items:flex-start; gap:.35rem; border-left:1px solid var(--hair); padding-left:1.6rem;}
 @media (max-width:900px){.hero-num{border-left:none; padding-left:0;}}
-.hero-big{font-family:var(--serif); font-size:clamp(4.5rem, 9vw, 7.5rem); line-height:.85; letter-spacing:-.04em; color:var(--ink);
+.hero-big{font-family:var(--serif); font-size:clamp(3.4rem, 6vw, 5rem); line-height:.9; letter-spacing:-.03em; color:var(--ink);
   font-variant-numeric:tabular-nums lining-nums;}
 .hero-big small{font-size:.35em; color:var(--muted); margin-left:.05em; letter-spacing:0;}
 .hero-cap{font-size:.82rem; color:var(--muted); max-width:30ch;}
@@ -143,28 +145,27 @@ div[data-baseweb="slider"] [role="slider"]{box-shadow:0 0 0 4px rgba(14,107,82,.
   padding:.34rem .8rem; border-radius:999px; color:#fff; background:var(--tone);}
 
 /* ---------- section headers ---------- */
-.sec{position:relative; margin:3.6rem 0 1.1rem; padding-top:1.4rem; border-top:1px solid var(--hair); scroll-margin-top:calc(var(--tb) + 12px);}
-.sec-num{position:absolute; right:0; top:.35rem; font-family:var(--serif); font-size:5.6rem; line-height:1; color:rgba(16,20,24,.06);
+.sec{position:relative; margin:2.2rem 0 .6rem; padding-top:1.1rem; border-top:1px solid var(--hair); scroll-margin-top:calc(var(--tb) + 10px);}
+.sec-num{position:absolute; right:0; top:.5rem; font-family:var(--serif); font-size:3.6rem; line-height:1; color:rgba(16,20,24,.08);
   letter-spacing:-.04em; pointer-events:none; user-select:none;}
-.sec h3{font-family:var(--serif); font-weight:400; font-size:2.1rem; margin:.3rem 0 .35rem; color:var(--ink); letter-spacing:-.02em;}
-.sec p{color:var(--muted); margin:0; max-width:72ch; font-size:.98rem;}
-.sub{margin:1.8rem 0 .7rem;}
-.sub h4{font-family:var(--serif); font-weight:400; font-size:1.35rem; margin:.15rem 0 .2rem; color:var(--ink);}
-.sub p{color:var(--muted); margin:0; max-width:72ch; font-size:.92rem;}
+.sec h3{font-family:var(--serif); font-weight:400; font-size:1.8rem; margin:.25rem 0 .25rem; color:var(--ink); letter-spacing:-.015em;}
+.sec p{color:var(--muted); margin:0; max-width:78ch; font-size:.93rem;}
+.sub{margin:1.1rem 0 .3rem;}
+.sub h4{font-family:var(--serif); font-weight:400; font-size:1.25rem; margin:.1rem 0 .15rem; color:var(--ink);}
+.sub p{color:var(--muted); margin:0; max-width:78ch; font-size:.88rem;}
 
 /* ---------- KPI tiles ---------- */
-.kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:.7rem;}
-.kpi{background:var(--card); border:1px solid var(--hair); border-radius:14px; padding:.95rem 1.05rem .9rem; box-shadow:var(--shadow);
-  position:relative; overflow:hidden; transition:transform .2s ease;}
-.kpi:hover{transform:translateY(-2px);}
+.kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:.6rem;}
+.kpi{background:var(--card); border:1px solid var(--hair); border-radius:12px; padding:.8rem .95rem .8rem; box-shadow:var(--shadow);
+  position:relative; overflow:hidden;}
 .kpi:after{content:""; position:absolute; left:1.05rem; right:1.05rem; bottom:0; height:2px; background:var(--tone,var(--hair)); border-radius:2px 2px 0 0;}
 .kpi-l{font-family:var(--mono); font-size:.62rem; letter-spacing:.14em; text-transform:uppercase; color:var(--muted);}
-.kpi-v{font-family:var(--serif); font-size:1.95rem; line-height:1.1; color:var(--ink); margin-top:.35rem; letter-spacing:-.01em;
+.kpi-v{font-family:var(--serif); font-size:1.75rem; line-height:1.1; color:var(--ink); margin-top:.35rem; letter-spacing:-.01em;
   font-variant-numeric:tabular-nums lining-nums;}
 .kpi-s{font-size:.78rem; color:var(--muted); margin-top:.25rem;}
 
 /* ---------- plan statement & meter ---------- */
-.stmt-text{font-family:var(--serif); font-size:1.5rem; line-height:1.3; color:var(--ink); margin:.4rem 0 1.2rem; max-width:34ch; letter-spacing:-.01em;}
+.stmt-text{font-family:var(--serif); font-size:1.35rem; line-height:1.3; color:var(--ink); margin:.35rem 0 .9rem; max-width:40ch; letter-spacing:-.01em;}
 .stmt-text strong{font-weight:400; color:var(--green);}
 .meter{margin:.3rem 0 .4rem;}
 .meter-track{position:relative; height:10px; border-radius:999px; overflow:visible; display:flex; gap:2px;}
@@ -179,17 +180,16 @@ div[data-baseweb="slider"] [role="slider"]{box-shadow:0 0 0 4px rgba(14,107,82,.
 .fact-l{font-size:.74rem; color:var(--muted);} .fact-v{font-family:var(--mono); font-size:.95rem; color:var(--ink); margin-top:.1rem;}
 
 /* ---------- action cards ---------- */
-.actions{display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:.75rem;}
-.act{background:var(--card); border:1px solid var(--hair); border-radius:14px; padding:1.05rem 1.15rem 1.1rem; box-shadow:var(--shadow);
-  transition:transform .2s ease, box-shadow .2s ease, border-color .2s ease;}
-.act:hover{transform:translateY(-3px); border-color:rgba(14,107,82,.35); box-shadow:0 1px 0 rgba(16,20,24,.02), 0 28px 44px -30px rgba(16,20,24,.4);}
+.actions{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:.6rem;}
+.act{background:var(--card); border:1px solid var(--hair); border-radius:12px; padding:.9rem 1.05rem .95rem; box-shadow:var(--shadow); transition:border-color .2s ease;}
+.act:hover{border-color:rgba(14,107,82,.4);}
 .act-n{font-family:var(--mono); font-size:.66rem; color:var(--green); letter-spacing:.14em;}
-.act-t{font-family:var(--serif); font-size:1.3rem; color:var(--ink); margin:.3rem 0 .35rem; line-height:1.15;}
+.act-t{font-family:var(--serif); font-size:1.2rem; color:var(--ink); margin:.3rem 0 .35rem; line-height:1.15;}
 .act-b{font-size:.9rem; color:var(--ink2); line-height:1.55;} .act-b strong{color:var(--ink);}
 
 /* ---------- goal cards ---------- */
-.goals{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:.75rem;}
-.goal{background:var(--card); border:1px solid var(--hair); border-radius:14px; padding:1rem 1.1rem; box-shadow:var(--shadow);}
+.goals{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:.6rem;}
+.goal{background:var(--card); border:1px solid var(--hair); border-radius:12px; padding:.9rem 1rem; box-shadow:var(--shadow);}
 .goal-h{display:flex; justify-content:space-between; align-items:center; gap:.5rem;}
 .goal-n{font-family:var(--serif); font-size:1.22rem; color:var(--ink);}
 .tag{font-family:var(--mono); font-size:.6rem; letter-spacing:.12em; text-transform:uppercase; padding:.16rem .5rem; border-radius:4px;
@@ -204,16 +204,16 @@ div[data-baseweb="slider"] [role="slider"]{box-shadow:0 0 0 4px rgba(14,107,82,.
 
 /* ---------- notes, pillars, checklist, tables, steps ---------- */
 .note{display:flex; gap:.8rem; background:var(--card); border:1px solid var(--hair); border-left:3px solid var(--tone,var(--amber));
-  border-radius:12px; padding:.75rem 1rem; margin:.45rem 0; font-size:.9rem; color:var(--ink2);}
+  border-radius:10px; padding:.65rem .95rem; margin:.35rem 0; font-size:.88rem; color:var(--ink2);}
 .note-k{font-family:var(--mono); font-size:.6rem; letter-spacing:.14em; text-transform:uppercase; color:var(--tone,var(--amber)); white-space:nowrap; padding-top:.2rem; min-width:88px;}
-.pillars{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:.75rem;}
-.pillar{background:var(--card); border:1px solid var(--hair); border-radius:14px; padding:1.1rem 1.2rem; box-shadow:var(--shadow);}
+.pillars{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:.6rem;}
+.pillar{background:var(--card); border:1px solid var(--hair); border-radius:12px; padding:.95rem 1.1rem; box-shadow:var(--shadow);}
 .pillar-k{font-family:var(--mono); font-size:.62rem; letter-spacing:.16em; text-transform:uppercase; color:var(--green);}
 .pillar-t{font-family:var(--serif); font-size:1.4rem; color:var(--ink); margin:.2rem 0 .6rem;}
 .pillar-row{display:flex; justify-content:space-between; padding:.34rem 0; border-top:1px solid var(--hair2); font-size:.85rem; color:var(--ink2);}
 .pillar-row b{font-family:var(--mono); font-weight:500; color:var(--ink);}
 .pillar-q{font-size:.82rem; color:var(--muted); margin-top:.6rem; line-height:1.5;}
-.checks{background:var(--card); border:1px solid var(--hair); border-radius:14px; box-shadow:var(--shadow); overflow:hidden;}
+.checks{background:var(--card); border:1px solid var(--hair); border-radius:12px; box-shadow:var(--shadow); overflow:hidden;}
 .check{display:grid; grid-template-columns:34px 1fr; gap:.2rem .6rem; padding:.75rem 1rem; border-top:1px solid var(--hair2);}
 .check:first-child{border-top:none;}
 .check-i{width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:.8rem; font-weight:700; color:#fff; background:var(--tone);}
@@ -239,59 +239,40 @@ div[data-baseweb="slider"] [role="slider"]{box-shadow:0 0 0 4px rgba(14,107,82,.
 .split-row{display:flex; justify-content:space-between; font-size:.83rem; color:var(--ink2); border-bottom:1px solid var(--hair2); padding-bottom:.3rem;}
 .split-row i{display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:.45rem;}
 .split-row b{font-family:var(--mono); font-weight:500; color:var(--ink);}
-.foot{margin-top:4rem; padding-top:1.4rem; border-top:1px solid var(--hair); display:flex; justify-content:space-between; gap:2rem; flex-wrap:wrap;
+.foot{margin-top:2.5rem; padding-top:1.1rem; border-top:1px solid var(--hair); display:flex; justify-content:space-between; gap:2rem; flex-wrap:wrap;
   font-size:.78rem; color:var(--muted);}
 .foot b{font-family:var(--serif); font-size:1.1rem; color:var(--ink); font-weight:400;}
 """
 
-# Runs in the parent page (not in the component frame): the frame only injects anime.js and this
-# code into the top document, so the observers and requestAnimationFrame belong to the page itself.
+# A small plain script injected into the page from a zero-height component frame (placed near the
+# top of the page because Streamlit lazy-loads component frames): nav highlight, scroll-progress
+# line and smooth scrolling. No animation library.
 PAGE_JS = r"""
 (function(){
-  if (window.__keel) { window.__keel.scan(); return; }
+  if (window.__keel) return;
   const D = document;
   const sc = D.querySelector('[data-testid="stMain"]') || D.scrollingElement;
-  let loaded = false;
   function prog(){ const b = D.querySelector('.tb-progress'); if(!b) return;
     const m = sc.scrollHeight - sc.clientHeight; b.style.width = (m > 0 ? sc.scrollTop / m * 100 : 0) + '%'; }
   sc.addEventListener('scroll', prog, {passive:true});
   D.addEventListener('click', e => { const a = e.target.closest('a[data-jump]'); if(!a) return; e.preventDefault();
     const t = D.getElementById(a.getAttribute('data-jump')); if(t) t.scrollIntoView({behavior:'smooth', block:'start'}); });
-  function countUp(root){ root.querySelectorAll('.count:not([data-done])').forEach(n => { n.dataset.done = 1;
-    const to = parseFloat(n.dataset.to), dec = parseInt(n.dataset.dec || 0), pre = n.dataset.pre || '', suf = n.dataset.suf || '';
-    const o = {v: 0}; anime({targets:o, v:to, duration:1600, easing:'easeOutExpo', update:() => { n.textContent = pre + o.v.toFixed(dec) + suf; }}); }); }
-  function needles(root){ root.querySelectorAll('.needle:not([data-done])').forEach(n => { n.dataset.done = 1; const to = n.style.left;
-    n.style.left = '0%'; anime({targets:n, left:to, duration:1400, easing:'easeInOutQuart', delay:200}); }); }
-  function words(root){ root.querySelectorAll('.hero-title:not([data-done])').forEach(h => { h.dataset.done = 1;
-    anime({targets:h.querySelectorAll('.w'), opacity:[0,1], translateY:[22,0], duration:800, easing:'easeOutCubic', delay:anime.stagger(55, {start:120})}); }); }
-  const io = new IntersectionObserver(es => { es.forEach(en => { if(!en.isIntersecting) return; const el = en.target; io.unobserve(el);
-    anime({targets:el, opacity:[0,1], translateY:[loaded ? 8 : 20, 0], duration:loaded ? 380 : 760, easing:'easeOutCubic'});
-    countUp(el); needles(el); words(el); }); }, {threshold:0.08, rootMargin:'0px 0px -6% 0px'});
   const nav = new IntersectionObserver(es => { es.forEach(en => { if(!en.isIntersecting) return; const id = en.target.id;
     D.querySelectorAll('.tb-nav a').forEach(a => a.classList.toggle('active', a.dataset.jump === id)); }); },
-    {rootMargin:'-20% 0px -70% 0px'});
-  function scan(){
-    D.querySelectorAll('.rv:not([data-rv]), [class*="st-key-card_"]:not([data-rv]), [data-testid="stPlotlyChart"]:not([data-rv])')
-      .forEach(el => { el.dataset.rv = 1; el.style.opacity = 0; io.observe(el); });
-    D.querySelectorAll('.sec[id]:not([data-nv])').forEach(el => { el.dataset.nv = 1; nav.observe(el); });
-    prog();
-  }
+    {rootMargin:'-15% 0px -75% 0px'});
+  function scan(){ D.querySelectorAll('.sec[id]:not([data-nv])').forEach(el => { el.dataset.nv = 1; nav.observe(el); }); prog(); }
   window.__keel = {scan};
-  scan(); setTimeout(() => { loaded = true; }, 2500);
-  new MutationObserver(() => { clearTimeout(window.__keelT); window.__keelT = setTimeout(scan, 150); }).observe(D.body, {childList:true, subtree:true});
+  scan();
+  new MutationObserver(() => { clearTimeout(window.__keelT); window.__keelT = setTimeout(scan, 200); }).observe(D.body, {childList:true, subtree:true});
 })();
 """
 
-ANIME_JS = """
+PAGE_BOOT = """
 <script>
 (function(){
   const P = window.parent, D = P.document;
-  function run(){ if (P.__keel) { P.__keel.scan(); return; }
-    const s = D.createElement('script'); s.textContent = PAGE_CODE; D.body.appendChild(s); }
-  if (P.anime) { run(); return; }
-  if (D.getElementById('keel-anime')) { const t = setInterval(() => { if (P.anime) { clearInterval(t); run(); } }, 50); return; }
-  const a = D.createElement('script'); a.id = 'keel-anime';
-  a.src = 'https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.2/anime.min.js'; a.onload = run; D.head.appendChild(a);
+  if (P.__keel) { P.__keel.scan(); return; }
+  const s = D.createElement('script'); s.textContent = PAGE_CODE; D.body.appendChild(s);
 })();
 </script>
 """.replace("PAGE_CODE", __import__("json").dumps(PAGE_JS))
@@ -303,9 +284,9 @@ def inject() -> None:
     _register_plotly()
 
 
-def anime_runtime() -> None:
-    """Mounts anime.js in a zero-height component frame and animates the parent page."""
-    components.html(ANIME_JS, height=0)
+def page_runtime() -> None:
+    """Mounts the nav/progress script from a zero-height component frame."""
+    components.html(PAGE_BOOT, height=0)
 
 
 def _register_plotly() -> None:
@@ -374,24 +355,15 @@ def topbar(spot: float, vix: float | None, rate: float, live: bool) -> None:
 
 
 def hero(eyebrow: str, title_html: str, sub: str, chips: list[tuple[str, str]], prob: float, cap: str) -> None:
-    # split the title into words so anime.js can stagger them; keep <em> runs intact
-    parts = re.split(r"(<em>.*?</em>)", title_html)
-    words = []
-    for part in parts:
-        if part.startswith("<em>"):
-            inner = part[4:-5]
-            words += [f'<span class="w"><em>{w} </em></span>' for w in inner.split()]
-        else:
-            words += [f'<span class="w">{w} </span>' for w in part.split()]
     tone, label = verdict_for(prob)
     ch = "".join(f'<span class="chip">{esc(k)} <b>{esc(v)}</b></span>' for k, v in chips)
-    st.html(f'''<section class="hero rv">
+    st.html(f'''<section class="hero">
 <div class="eyebrow">{esc(eyebrow)}</div>
-<h1 class="hero-title">{"".join(words)}</h1>
+<h1 class="hero-title">{title_html}</h1>
 <div class="hero-grid">
   <div><p class="hero-sub">{md(sub)}</p><div class="chips">{ch}</div></div>
   <div class="hero-num"><span class="verdict" style="--tone:{TONE[tone]}">{label}</span>
-    <div class="hero-big"><span class="count" data-to="{prob * 100:.0f}" data-dec="0">0</span><small>%</small></div>
+    <div class="hero-big">{prob * 100:.0f}<small>%</small></div>
     <div class="hero-cap">{esc(cap)}</div></div>
 </div></section>''')
 
@@ -401,12 +373,12 @@ def section(title: str, lede: str = "", eyebrow: str = "", anchor: str | None = 
     ld = f"<p>{md(lede)}</p>" if lede else ""
     nm = f'<div class="sec-num">{esc(num)}</div>' if num else ""
     idattr = f' id="sec-{anchor}"' if anchor else ""
-    st.html(f'<div class="sec rv"{idattr}>{nm}{eb}<h3>{esc(title)}</h3>{ld}</div>')
+    st.html(f'<div class="sec"{idattr}>{nm}{eb}<h3>{esc(title)}</h3>{ld}</div>')
 
 
 def subsection(title: str, lede: str = "") -> None:
     ld = f"<p>{md(lede)}</p>" if lede else ""
-    st.html(f'<div class="sub rv"><h4>{esc(title)}</h4>{ld}</div>')
+    st.html(f'<div class="sub"><h4>{esc(title)}</h4>{ld}</div>')
 
 
 def footer() -> None:
@@ -423,13 +395,13 @@ def kpis(items: list[dict]) -> None:
         sub = f'<div class="kpi-s">{md(it["sub"])}</div>' if it.get("sub") else ""
         out.append(f'<div class="kpi" style="--tone:{tone}"><div class="kpi-l">{esc(it["label"])}</div>'
                    f'<div class="kpi-v">{esc(it["value"])}</div>{sub}</div>')
-    st.html(f'<div class="kpis rv">{"".join(out)}</div>')
+    st.html(f'<div class="kpis">{"".join(out)}</div>')
 
 
 def plan_statement(p: float, sentence: str, facts: list[tuple[str, str]], eyebrow: str = "Plan confidence") -> None:
     pos = max(1.0, min(99.0, p * 100))
     facts_html = "".join(f'<div><div class="fact-l">{esc(k)}</div><div class="fact-v">{esc(v)}</div></div>' for k, v in facts)
-    st.html(f"""<div class="rv">
+    st.html(f"""<div class="blk">
 <div class="eyebrow">{esc(eyebrow)}</div>
 <p class="stmt-text">{md(sentence)}</p>
 <div class="meter">
@@ -450,7 +422,7 @@ def actions(advice: list[str], start: int = 1) -> None:
         t, b = split_title(a)
         cards.append(f'<div class="act"><div class="act-n">{i:02d}</div><div class="act-t">{esc(t)}</div>'
                      f'<div class="act-b">{md(b)}</div></div>')
-    st.html(f'<div class="actions rv">{"".join(cards)}</div>')
+    st.html(f'<div class="actions">{"".join(cards)}</div>')
 
 
 def goal_cards(goals: list[dict]) -> None:
@@ -463,13 +435,13 @@ def goal_cards(goals: list[dict]) -> None:
 <div class="goal-m">{md(g['meta'])}</div>
 <div class="bar" style="--tone:{TONE[tone]}"><span style="width:{max(2, p * 100):.0f}%"></span></div>
 <div class="goal-p"><span>Probability funded</span><b>{p:.0%}</b></div></div>""")
-    st.html(f'<div class="goals rv">{"".join(out)}</div>')
+    st.html(f'<div class="goals">{"".join(out)}</div>')
 
 
 def notes(items: list[str], kind: str = "Advisor note", tone: str = "mid") -> None:
     if not items:
         return
-    st.html('<div class="rv">' + "".join(f'<div class="note" style="--tone:{TONE[tone]}"><div class="note-k">{esc(kind)}</div>'
+    st.html('<div class="blk">' + "".join(f'<div class="note" style="--tone:{TONE[tone]}"><div class="note-k">{esc(kind)}</div>'
                                          f'<div>{md(t)}</div></div>' for t in items) + "</div>")
 
 
@@ -479,7 +451,7 @@ def pillars(items: list[dict]) -> None:
         rows = "".join(f'<div class="pillar-row"><span>{esc(k)}</span><b>{esc(v)}</b></div>' for k, v in it["rows"])
         out.append(f'<div class="pillar"><div class="pillar-k">{esc(it["key"])}</div><div class="pillar-t">{esc(it["title"])}</div>'
                    f'{rows}<div class="pillar-q">{md(it["note"])}</div></div>')
-    st.html(f'<div class="pillars rv">{"".join(out)}</div>')
+    st.html(f'<div class="pillars">{"".join(out)}</div>')
 
 
 def checklist(rows: list[tuple[str, bool, str]]) -> None:
@@ -488,7 +460,7 @@ def checklist(rows: list[tuple[str, bool, str]]) -> None:
         tone = GREEN if ok else RED
         out.append(f'<div class="check"><div class="check-i" style="--tone:{tone}">{"&#10003;" if ok else "&#10005;"}</div>'
                    f'<div class="check-t">{esc(name)}</div><div class="check-e">{esc(ev)}</div></div>')
-    st.html(f'<div class="checks rv">{"".join(out)}</div>')
+    st.html(f'<div class="checks">{"".join(out)}</div>')
 
 
 def table(headers: list[str], rows: list[list], num_cols: set[int] | None = None) -> None:
@@ -503,7 +475,7 @@ def table(headers: list[str], rows: list[list], num_cols: set[int] | None = None
 def steps(items: list[tuple[str, str]]) -> None:
     out = "".join(f'<div class="step"><div class="step-n">{i:02d}</div><div class="step-t">{esc(t)}</div>'
                   f'<div class="step-b">{md(b)}</div></div>' for i, (t, b) in enumerate(items, 1))
-    st.html(f'<div class="steps rv">{out}</div>')
+    st.html(f'<div class="steps">{out}</div>')
 
 
 def badge(text: str, tone: str = "info") -> str:
