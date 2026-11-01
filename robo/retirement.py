@@ -49,15 +49,46 @@ def claim_factor(claim_age: float, fra: float) -> float:
 
 
 def estimate_pia(annual_income: float) -> float:
-    """Primary Insurance Amount (annual, today's $) assuming a 35-year career at today's real wage."""
+    """Primary Insurance Amount (annual, today's $) assuming a 35-year career at today's real wage,
+    capped at the 2026 maximum benefit at full retirement age."""
     aime = min(annual_income, SS_WAGE_BASE) / 12
     pia = 0.9 * min(aime, SS_BEND_1) + 0.32 * max(0.0, min(aime, SS_BEND_2) - SS_BEND_1) \
         + 0.15 * max(0.0, aime - SS_BEND_2)
-    return 12 * pia
+    return 12 * min(pia, SS_MAX_AT_FRA_MONTHLY)
 
 
 def estimate_benefit(annual_income: float, age_now: int, claim_age: int) -> float:
     return estimate_pia(annual_income) * claim_factor(claim_age, full_retirement_age(age_now))
+
+
+def spousal_claim_factor(claim_age: float, fra: float) -> float:
+    """Spousal benefit (50% of the worker's PIA) reduced 25/36% per month for the first 36 months
+    before FRA and 5/12% after; no delayed-retirement credits (SSA POMS RS 00615.201)."""
+    months = round((fra - claim_age) * 12)
+    if months <= 0:
+        return 1.0
+    return 1.0 - min(months, 36) * 25 / 3600 - max(months - 36, 0) * 5 / 1200
+
+
+def claiming_analysis(pia: float, fra: float, survival: dict, discount: float = 0.019) -> list[dict]:
+    """Expected present value of lifetime benefits (today's $) for each claiming age 62-70, using the
+    client's own survival curve. Breakeven ages compare each option with claiming at 62."""
+    ages, surv = survival["ages"], survival["survival"]
+    out = []
+    for claim in range(62, 71):
+        f = claim_factor(claim, fra)
+        pv, cum = 0.0, []
+        for a, s in zip(ages, surv):
+            if a >= claim:
+                pv += pia * f * s / (1 + discount) ** (a - ages[0])
+            cum.append(pv)
+        out.append({"claim_age": claim, "factor": f, "annual": pia * f, "epv": pv, "cum": cum})
+    base = out[0]["cum"]
+    for row in out[1:]:
+        be = next((a for a, c0, c1 in zip(ages, base, row["cum"]) if c1 >= c0 and a > row["claim_age"]), None)
+        row["breakeven_age"] = be
+    out[0]["breakeven_age"] = None
+    return out
 
 
 def rmd_start_age(age_now: int) -> int:

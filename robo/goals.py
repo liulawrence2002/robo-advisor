@@ -13,8 +13,8 @@ import pandas as pd
 
 from .kyc import ClientProfile, Goal
 from .mortality import joint_survival, survival_table
-from .retirement import (CURRENT_YEAR, estimate_benefit, full_retirement_age, claim_factor,
-                         estimate_pia, retirement_contribution_cap, ss_payable_factor)
+from .retirement import (CURRENT_YEAR, full_retirement_age, claim_factor, estimate_pia,
+                         retirement_contribution_cap, spousal_claim_factor, ss_payable_factor)
 
 PLAN_FLOOR_AGE = 95
 
@@ -34,21 +34,31 @@ def social_security(p: ClientProfile) -> tuple[float, float, str]:
     """(client annual benefit, spouse annual benefit, note), today's $, at claim ages."""
     f, h = p.finances, p.household
     note = []
+    if p.identity.citizenship == "Non-resident alien" and f.social_security is None:
+        note.append("non-resident alien without an SSA statement: no benefit assumed")
+        return 0.0, 0.0, "; ".join(note)
+    married = h.marital_status == "married" and bool(h.spouse_age)
+    own1, own2 = estimate_pia(f.annual_income), estimate_pia(f.spouse_income) if married else 0.0
+    fra1 = full_retirement_age(h.age)
     if f.social_security is not None:
         ss1 = f.social_security
         note.append("client benefit from SSA statement")
     else:
-        ss1 = estimate_benefit(f.annual_income, h.age, f.ss_claim_age)
+        if f.annual_income <= 0 and not f.already_claiming_ss:
+            note.append("no current earnings and no SSA statement: client benefit assumed zero; enter the statement")
+        # own record, or the spousal benefit on the spouse's record (whichever is larger)
+        ss1 = max(own1 * claim_factor(f.ss_claim_age, fra1),
+                  0.5 * own2 * spousal_claim_factor(f.ss_claim_age, fra1) if married else 0.0)
         note.append(f"client benefit estimated from income at claim age {f.ss_claim_age}")
     ss2 = 0.0
-    if h.marital_status == "married" and h.spouse_age:
+    if married:
         if f.spouse_social_security is not None:
             ss2 = f.spouse_social_security
         else:
-            own = estimate_pia(f.spouse_income)
-            spousal = 0.5 * estimate_pia(f.annual_income)
-            ss2 = max(own, spousal) * claim_factor(f.spouse_ss_claim_age, full_retirement_age(h.spouse_age))
-            note.append("spouse benefit estimated (own or 50% spousal)")
+            fra2 = full_retirement_age(h.spouse_age)
+            ss2 = max(own2 * claim_factor(f.spouse_ss_claim_age, fra2),
+                      0.5 * own1 * spousal_claim_factor(f.spouse_ss_claim_age, fra2))
+            note.append("spouse benefit estimated (own record or 50% spousal)")
     return ss1, ss2, "; ".join(note)
 
 
@@ -69,18 +79,26 @@ def cashflow_schedule(p: ClientProfile, apply_ss_shortfall: bool = True) -> pd.D
     T = planning_age(p) - age0
     t = np.arange(T + 1)
     age = age0 + t
-    working = age < f.retirement_age
+    ret_age = p.effective_retirement_age
+    # the client's own earnings stop at the effective retirement age; a stated retiree has none.
+    # A working client past their 'retirement age' keeps earning until they stop (employment status).
+    client_working = (age < ret_age) if p.identity.employment_status != "retired" else np.zeros_like(age, bool)
+    if p.identity.employment_status != "retired" and h.age >= f.retirement_age and f.annual_income > 0:
+        client_working = age < h.age + 1       # still working this year; retirement assumed from next year
     growth = (1 + f.income_real_growth) ** t
-    salary = np.where(working, f.household_income * growth, 0.0)
+    married = h.marital_status == "married" and bool(h.spouse_age)
+    # the spouse's earnings run to the spouse's own age at the household retirement age
+    sp_working = (t < max(ret_age - h.age, 0)) if (married and f.spouse_income > 0) else np.zeros_like(age, bool)
+    salary = np.where(client_working, f.annual_income * growth, 0.0) + np.where(sp_working, f.spouse_income * growth, 0.0)
     employee = salary * f.savings_rate
     match = salary * f.employer_match
 
     ss1, ss2, _ = social_security(p)
-    claim1 = h.age if f.already_claiming_ss else f.ss_claim_age
+    claim1 = max(h.age, 62) if f.already_claiming_ss else f.ss_claim_age
     ss_client = np.where(age >= claim1, ss1, 0.0)
-    if h.marital_status == "married" and h.spouse_age:
+    if married:
         sp_age = h.spouse_age + t
-        claim2 = h.spouse_age if f.already_claiming_ss else f.spouse_ss_claim_age
+        claim2 = h.spouse_age if (f.already_claiming_ss and h.spouse_age >= 62) else max(f.spouse_ss_claim_age, 62)
         ss_spouse = np.where(sp_age >= claim2, ss2, 0.0)
     else:
         ss_spouse = np.zeros_like(t, dtype=float)
@@ -88,9 +106,9 @@ def cashflow_schedule(p: ClientProfile, apply_ss_shortfall: bool = True) -> pd.D
     ss_client, ss_spouse = ss_client * haircut, ss_spouse * haircut
     # benefit as if already claimed: the long-run income the spending plan relies on
     ss_client_full = ss1 * haircut
-    ss_spouse_full = (ss2 * haircut) if (h.marital_status == "married" and h.spouse_age) else np.zeros(len(t))
-    pension = np.where(age >= f.retirement_age, f.pension, 0.0)
-    spend = np.where(age >= f.retirement_age, retirement_spending(p), 0.0)
+    ss_spouse_full = (ss2 * haircut) if married else np.zeros(len(t))
+    pension = np.where(age >= ret_age, f.pension, 0.0)
+    spend = np.where(age >= ret_age, retirement_spending(p), 0.0)
 
     df = pd.DataFrame({"t": t, "age": age, "year": CURRENT_YEAR + t, "salary": salary,
                        "employee_savings": employee, "employer_match": match,
@@ -101,7 +119,8 @@ def cashflow_schedule(p: ClientProfile, apply_ss_shortfall: bool = True) -> pd.D
         if g.kind in ("retirement", "bequest"):
             continue
         col = np.zeros(T + 1)
-        for k in range(g.years_until, min(g.years_until + max(g.duration_years, 1), T + 1)):
+        start = min(max(int(g.years_until), 0), T)      # goals past the horizon are paid in the last year
+        for k in range(start, min(start + max(g.duration_years, 1), T + 1)):
             col[k] = g.amount / max(g.duration_years, 1)
         df[f"goal:{g.name}"] = col
     df["retirement_cap"] = [retirement_contribution_cap(a) * (2 if h.marital_status == "married" and f.spouse_income > 0 else 1)

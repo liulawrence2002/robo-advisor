@@ -7,3 +7,7 @@ pandas>=2.2,<3
 scipy>=1.13,<2
 plotly>=5.20,<7
 yfinance>=0.2.50
+curl_cffi>=0.16
+requests>=2.31
+lxml>=5.0
+openpyxl>=3.1

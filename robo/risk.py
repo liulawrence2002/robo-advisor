@@ -24,8 +24,8 @@ from scipy.optimize import brentq
 
 from .cma import CMA, EQUITY_KEYS, load_cma, portfolio_stats, stress_returns
 from .goals import cashflow_schedule, goal_columns, liability_duration, net_flows, pv
-from .kyc import MAX_LOSS_MAP, ClientProfile, gamble_gamma, questionnaire_score
-from .portfolio import TIER_NAMES, load_models, models_summary, tier_equity, tier_for_equity
+from .kyc import MAX_LOSS_MAP, ClientProfile, consistency_checks, gamble_gamma, questionnaire_score
+from .portfolio import TIER_NAMES, blend_for_equity, load_models, models_summary, tier_equity, tier_for_equity
 
 REAL_SAFE_RATE = 0.019        # TIPS-like real yield: JPM 10y UST 4.6% less 2.5% inflation (~2%)
 STABILITY = {  # (equity beta of labour income, extra discount spread, capacity points)
@@ -64,9 +64,13 @@ class RiskProfile:
     tier_name: str
     binding: str
     flags: list[str] = field(default_factory=list)
+    review_flags: list[str] = field(default_factory=list)   # inconsistent answers: advisor review (IM 2017-02)
+    model_worst_loss: float = 0.0                           # worst 2008/2022 loss of the recommended mix
+    override_applied: int = 0                               # tiers moved by the client's own override
+    engine_equity: float = 0.0                              # recommendation before any client override
 
     def summary(self) -> dict:
-        return {k: v for k, v in self.__dict__.items() if k not in ("capacity_parts", "flags")}
+        return {k: v for k, v in self.__dict__.items() if k not in ("capacity_parts", "flags", "review_flags")}
 
 
 # ---------------------------------------------------------------- willingness
@@ -109,7 +113,7 @@ def capacity_parts(p: ClientProfile, df: pd.DataFrame, funded: float, t: int = 0
     f = p.finances
     sub = df.iloc[t:].reset_index(drop=True)
     dur = liability_duration(sub, p)
-    retired = p.identity.employment_status == "retired" or (p.household.age + t) >= f.retirement_age
+    retired = (p.household.age + t) >= p.effective_retirement_age
     if retired:
         essential = f.retirement_spending * f.essential_share_of_spending
         g0 = float((sub["ss_client"] + sub["ss_spouse"] + sub["pension"]).iloc[0]) if len(sub) else 0.0
@@ -147,14 +151,14 @@ def _balance_sheet(p: ClientProfile, df: pd.DataFrame) -> tuple[float, float, fl
     f = p.finances
     _, spread, _ = STABILITY[f.income_stability]
     contrib = (df["employee_savings"] + df["employer_match"]).to_numpy(float)
-    H = pv(contrib, REAL_SAFE_RATE + spread) - contrib[0]
+    H = pv(contrib[1:], REAL_SAFE_RATE + spread)       # future contributions (this year's is not yet wealth)
     G = pv((df["ss_client"] + df["ss_spouse"] + df["pension"]).to_numpy(float), REAL_SAFE_RATE)
     outflows = df["retirement_spending"].to_numpy(float).copy()
     for c in goal_columns(df):
         outflows += df[c].to_numpy(float)
     pv_out = pv(outflows, REAL_SAFE_RATE)
     F = max(f.investable, 1.0)
-    funded = (F + pv(contrib, REAL_SAFE_RATE) + G) / pv_out if pv_out > 0 else 9.99
+    funded = (F + H + contrib[0] + G) / pv_out if pv_out > 0 else 9.99
     return F, H, G, funded
 
 
@@ -164,15 +168,19 @@ def assess(p: ClientProfile, cma: CMA | None = None, apply_ss_shortfall: bool = 
     f = p.finances
     flags: list[str] = []
 
-    score, n = questionnaire_score(p.risk_answers)
+    answers, review = consistency_checks(p.risk_answers, p.household.age, p.experience.objective)
+    score, n = questionnaire_score(answers)
+    if n < 8:
+        review.append(f"Only {n} of 10 risk questions answered: the score defaults toward the middle. Complete the "
+                      "questionnaire before the recommendation is relied on (FINRA 2111 investment profile).")
     g_q = gamma_from_score(score)
     g_g, g_note = gamble_gamma(p.gamble_answers)
     # questionnaire weighted 2/3: psychometric scales are more reliable than one hypothetical gamble
     gamma = float(np.exp((2 * np.log(g_q) + np.log(g_g)) / 3)) if g_g else g_q
     if g_g and abs(np.log(g_q / g_g)) > np.log(2.5):
-        flags.append("Questionnaire and income-gamble answers disagree strongly; an advisor should "
-                     "review the risk answers with the client before investing.")
-    max_loss = MAX_LOSS_MAP[p.risk_answers["q5_maxloss"]] if "q5_maxloss" in p.risk_answers else 0.20
+        review.append("Questionnaire and income-gamble answers disagree strongly; an advisor should "
+                      "review the risk answers with the client before investing.")
+    max_loss = MAX_LOSS_MAP[answers["q5_maxloss"]] if "q5_maxloss" in answers else 0.20
     e_merton = merton_share(gamma, cma)
 
     df = cashflow_schedule(p, apply_ss_shortfall)
@@ -202,8 +210,26 @@ def assess(p: ClientProfile, cma: CMA | None = None, apply_ss_shortfall: bool = 
     cands = {"balance-sheet willingness (Merton + human capital)": e_hc,
              "stated maximum loss (stress test)": e_draw, "risk capacity": e_capacity}
     binding = min(cands, key=cands.get)
-    e_rec = float(min(cands.values()))
+    e_engine = float(min(cands.values()))
+    e_rec = e_engine
+    # client override: a more conservative choice is honoured automatically (Schwab/Betterment practice);
+    # a more aggressive one needs an advisor's sign-off and is only flagged
+    ov = int(p.experience.override_tiers)
+    applied = 0
+    if ov < 0:
+        applied = max(ov, -tier_for_equity(e_engine))
+        e_rec = tier_equity(tier_for_equity(e_engine) + applied)
+        binding = "client's own choice (more conservative than the engine)"
+    elif ov > 0:
+        review.append(f"Client asked for {ov} tier(s) more risk than the engine recommends"
+                      + (f" ({p.experience.override_reason})" if p.experience.override_reason else "")
+                      + ". Not applied: raising risk above willingness or capacity requires an advisor's review.")
     tier = tier_for_equity(e_rec)
+    worst = float(min(stress_returns(blend_for_equity(e_rec), cma).values()))
+    if worst < -max_loss - 1e-9:
+        flags.append(f"Even the most conservative model loses {-worst:.1%} in the 2022 stress scenario, more than the "
+                     f"{max_loss:.0%} the client said they could bear. Only T-bills and short Treasuries meet that limit; "
+                     "the client should understand the trade-off before investing.")
 
     if r_need is None or (e_need is not None and e_need > e_rec + 0.05) or (r_need is not None and e_need is None):
         need_txt = f"{e_need:.0%} equity" if e_need is not None else "more than any model offers"
@@ -216,14 +242,23 @@ def assess(p: ClientProfile, cma: CMA | None = None, apply_ss_shortfall: bool = 
     if emerg < 3:
         flags.append(f"Emergency fund covers {emerg:.1f} months of essential expenses; build it to "
                      "3-6 months in cash before investing new money.")
-    if f.other_debt > 0.25 * max(f.household_income, 1):
-        flags.append("High non-mortgage debt: paying down debt above ~7% interest beats expected portfolio returns.")
-    if f.concentrated_stock > 0.10 * max(f.liquid_net_worth, 1):
-        flags.append(f"Single-stock position is {f.concentrated_stock / f.liquid_net_worth:.0%} of liquid "
+    if f.liquidity_need_12m > 0 and f.liquidity_need_12m > f.cash:
+        flags.append(f"Planned withdrawals of ${f.liquidity_need_12m:,.0f} in the next 12 months exceed bank cash "
+                     f"(${f.cash:,.0f}): hold the difference in T-bills outside the risk portfolio.")
+    if f.other_debt > 0.25 * max(f.household_income, 1) or (f.other_debt > 0 and f.other_debt_rate >= 0.07):
+        flags.append(f"Non-mortgage debt of ${f.other_debt:,.0f} at {f.other_debt_rate:.0%}: paying it down is a "
+                     f"risk-free {f.other_debt_rate:.0%} return, above the portfolio's expected return; clear it "
+                     "before adding to taxable investments.")
+    conc_base = max(f.liquid_net_worth, f.taxable, 1.0)
+    if f.concentrated_stock > 0.10 * conc_base:
+        flags.append(f"Single-stock position is {f.concentrated_stock / conc_base:.0%} of liquid "
                      "net worth (above the 10% concentration threshold).")
     if e_hc > e_rec + 0.20:
         flags.append("Future savings and Social Security would justify more equity than the client's "
                      f"stated limits allow ({e_hc:.0%} vs {e_rec:.0%}); the recommendation respects the limits.")
+    if p.household.dependents > 0 and not p.household.life_insured and p.household.age < p.effective_retirement_age:
+        flags.append(f"{p.household.dependents} dependent(s) and no life insurance: human capital of "
+                     f"${H:,.0f} is uninsured. Term cover comes before investment risk.")
 
     return RiskProfile(
         tolerance_score=score, n_answered=n, gamma_questionnaire=g_q, gamma_gamble=g_g, gamble_note=g_note,
@@ -232,6 +267,7 @@ def assess(p: ClientProfile, cma: CMA | None = None, apply_ss_shortfall: bool = 
         capacity_score=cap_score, capacity_parts=parts, capacity_equity=e_capacity,
         need_real_return=r_need, need_equity=e_need, funded_ratio=float(funded),
         recommended_equity=e_rec, tier=tier, tier_name=TIER_NAMES[tier], binding=binding, flags=flags,
+        review_flags=review, model_worst_loss=worst, override_applied=applied, engine_equity=e_engine,
     )
 
 
@@ -268,7 +304,7 @@ def retirement_glidepath(p: ClientProfile, rp: RiskProfile, cma: CMA | None = No
         path[t] = np.clip(e, floor, min(rp.drawdown_equity, cap_t))
         F = max(F * (1 + r_exp) + contrib[t] + guaranteed[t] - spend[t], 1.0)
 
-    ret_t = max(f.retirement_age - p.household.age, 0)
+    ret_t = max(p.effective_retirement_age - p.household.age, 0)
     lo, hi = max(ret_t - 5, 0), min(ret_t + 5, T)
     if ret_t <= T:
         path[lo:hi + 1] = path[lo:hi + 1].min()

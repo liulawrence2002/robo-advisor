@@ -166,10 +166,28 @@ def payoff_curve(ov: Overlay, rf: float, grid: np.ndarray | None = None) -> tupl
 
 # ---------------------------------------------------------------- futures sizing
 def futures_hedge(notional_to_hedge: float, m: Market, beta: float = 1.0, micro: bool = True) -> dict:
-    """Short S&P 500 futures to cut equity exposure without selling (and realising gains)."""
+    """Short S&P 500 futures to cut equity exposure without selling (and realising gains).
+
+    Contracts = beta x notional / (index x multiplier): the sleeve's beta to the S&P 500 scales the
+    hedge (international and small-cap holdings do not move one-for-one with the index).
+    """
     mult = MES_MULT if micro else ES_MULT
     per = m.spot * mult
     n = int(round(beta * notional_to_hedge / per))
     return {"contracts": n, "contract": "Micro E-mini S&P 500 (MES)" if micro else "E-mini S&P 500 (ES)",
-            "notional_per_contract": per, "hedged_notional": n * per,
+            "notional_per_contract": per, "hedged_notional": n * per, "beta": beta,
             "initial_margin_est": n * per * 0.06}   # ~6% of notional (exchange margins vary)
+
+
+def equity_beta_to_sp500(weights, cma) -> float:
+    """Beta of a portfolio's equity sleeve to US large cap, from the CMA covariance."""
+    import numpy as np
+    w = np.asarray([weights.get(k, 0.0) if hasattr(weights, "get") else weights[i] for i, k in enumerate(cma.keys)], float)
+    eq = cma.mask(("us_lc", "us_sc", "intl_dev", "em", "reit"))
+    w_eq = w * eq
+    if w_eq.sum() <= 0:
+        return 1.0
+    w_eq = w_eq / w_eq.sum()
+    cov = cma.cov
+    i = cma.idx("us_lc")
+    return float((w_eq @ cov[:, i]) / cov[i, i])

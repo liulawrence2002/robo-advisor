@@ -9,21 +9,21 @@ def case_a() -> ClientProfile:
     """(a) 30-year-old saver: buy a house in 2 years, retire in 35 years."""
     return ClientProfile(
         label="A: 30-year-old saver (house in 2 yrs, retire in 35)",
-        identity=Identity(full_name="Case A (age 30)", occupation="Financial analyst", state="NY",
-                          trusted_contact="Parent (on file)"),
-        household=Household(age=30, sex="female", health="good", marital_status="single"),
+        identity=Identity(full_name="Case A (age 30)", occupation="Financial analyst", employer="Regional bank",
+                          state="NY", trusted_contact="Parent (on file)", expected_initial_funding=35_000),
+        household=Household(age=30, sex="female", health="good", marital_status="single", life_insured=False),
         finances=Finances(
             annual_income=95_000, income_real_growth=0.015, income_stability="stable",
             savings_rate=0.15, employer_match=0.04, contrib_to_roth_share=0.5,
             taxable=35_000, traditional=22_000, roth=8_000, cash=15_000, taxable_cost_basis_pct=0.9,
-            other_debt=12_000, monthly_essential_expenses=3_800,
+            other_debt=12_000, other_debt_rate=0.055, monthly_essential_expenses=3_800,
             retirement_age=65, retirement_spending=70_000, essential_share_of_spending=0.65,
-            ss_claim_age=67, ordinary_tax_rate=0.28, cap_gains_rate=0.15),
+            ss_claim_age=67, ordinary_tax_rate=0.28, cap_gains_rate=0.15, state_tax_rate=0.06),
         goals=[
             Goal("Home down payment", "home", amount=58_500, years_until=2, priority="need"),
             Goal("Retirement", "retirement", amount=70_000, years_until=35, duration_years=30, priority="need"),
         ],
-        experience=Experience(years_investing=4, knowledge="good", objective="growth"),
+        experience=Experience(years_investing=4, knowledge="good", stock_years=4, objective="growth"),
         risk_answers=answers_from_labels({
             "q1_self": "High", "q2_word": "Opportunity", "q3_drop": "Hold and wait", "q4_history": "Held",
             "q5_maxloss": "20-30%", "q6_portfolio": "$78k to $130k", "q7_sure": "The 50% chance of $10,000",
@@ -37,8 +37,8 @@ def case_b() -> ClientProfile:
     """(b) 55-year-old retirement investor with $200K saved."""
     return ClientProfile(
         label="B: 55-year-old with $200K saved",
-        identity=Identity(full_name="Case B (age 55)", occupation="Operations manager", state="OH",
-                          trusted_contact="Sibling (on file)"),
+        identity=Identity(full_name="Case B (age 55)", occupation="Operations manager", employer="Manufacturing company",
+                          state="OH", trusted_contact="Sibling (on file)", expected_initial_funding=25_000),
         household=Household(age=55, sex="male", health="average", marital_status="divorced"),
         finances=Finances(
             annual_income=110_000, income_real_growth=0.0, income_stability="stable",
@@ -46,10 +46,10 @@ def case_b() -> ClientProfile:
             taxable=25_000, traditional=160_000, roth=15_000, cash=20_000, taxable_cost_basis_pct=0.8,
             home_value=380_000, mortgage=150_000, monthly_essential_expenses=4_500,
             retirement_age=67, retirement_spending=66_000, essential_share_of_spending=0.7,
-            ss_claim_age=67, ordinary_tax_rate=0.24, cap_gains_rate=0.15),
+            ss_claim_age=67, ordinary_tax_rate=0.24, cap_gains_rate=0.15, state_tax_rate=0.035),
         goals=[Goal("Retirement", "retirement", amount=66_000, years_until=12, duration_years=30, priority="need")],
-        experience=Experience(years_investing=20, knowledge="good", options_years=2, objective="growth",
-                              options_disclosure_ack=True),
+        experience=Experience(years_investing=20, knowledge="good", stock_years=20, bond_years=10, options_years=2,
+                              options_trades_per_year=6, objective="growth", options_disclosure_ack=True),
         risk_answers=answers_from_labels({
             "q1_self": "Average", "q2_word": "Uncertainty", "q3_drop": "Hold and wait", "q4_history": "Held",
             "q5_maxloss": "10-20%", "q6_portfolio": "$85k to $122k", "q7_sure": "The sure $5,000",
@@ -64,23 +64,26 @@ def case_c() -> ClientProfile:
     return ClientProfile(
         label="C: 70-year-old retiree with $2M",
         identity=Identity(full_name="Case C (age 70)", employment_status="retired", occupation="Retired engineer",
-                          state="FL", trusted_contact="Adult child (on file)"),
+                          employer="Honeywell (former)", account_type="joint", state="FL",
+                          trusted_contact="Adult child (on file)", power_of_attorney="Spouse (durable POA)",
+                          source_of_wealth="salary and savings", expected_initial_funding=2_000_000),
         household=Household(age=70, sex="male", health="good", marital_status="married",
-                            spouse_age=68, spouse_sex="female", spouse_health="good"),
+                            spouse_age=68, spouse_sex="female", spouse_health="good", long_term_care_insured=False),
         finances=Finances(
             annual_income=0, income_stability="very stable", savings_rate=0.0, employer_match=0.0,
             taxable=600_000, traditional=1_200_000, roth=200_000, cash=60_000, taxable_cost_basis_pct=0.55,
-            concentrated_stock=250_000, home_value=900_000, monthly_essential_expenses=6_000,
+            concentrated_stock=250_000, concentrated_ticker="HON", home_value=900_000, monthly_essential_expenses=6_000,
             retirement_age=65, retirement_spending=110_000, essential_share_of_spending=0.6,
             social_security=42_000, spouse_social_security=24_000, already_claiming_ss=True,
-            ordinary_tax_rate=0.24, cap_gains_rate=0.15),
+            ordinary_tax_rate=0.24, cap_gains_rate=0.15, state_tax_rate=0.0),
         goals=[
             Goal("Retirement", "retirement", amount=110_000, years_until=0, duration_years=30, priority="need"),
             Goal("Grandchildren's college", "education", amount=120_000, years_until=6, duration_years=4,
                  priority="want"),
             Goal("Legacy to children", "bequest", amount=750_000, years_until=25, priority="wish"),
         ],
-        experience=Experience(years_investing=40, knowledge="extensive", options_years=10, futures_years=3,
+        experience=Experience(years_investing=40, knowledge="extensive", stock_years=40, bond_years=30,
+                              options_years=10, options_trades_per_year=12, futures_years=3,
                               objective="income", options_disclosure_ack=True, futures_disclosure_ack=True),
         risk_answers=answers_from_labels({
             "q1_self": "Average", "q2_word": "Uncertainty", "q3_drop": "Hold and wait", "q4_history": "Held",

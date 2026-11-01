@@ -59,8 +59,12 @@ def _bounds(cma: CMA, t: int) -> tuple[list, list]:
         "mgd_fut": 0.06 if allow_alts else 0.0,
     })
     if t == 0:
-        for k in ("us_ig",):
-            ub[k] = 0.0
+        # Capital preservation is a liability-matching sleeve for money needed within ~2 years and for
+        # the retiree's income reserve: T-bills, short/intermediate Treasuries and TIPS only. No
+        # aggregate bonds (6-year duration lost 13% in 2022) and no credit. Its worst 2008/2022 loss
+        # is under 5%, so it also satisfies the most conservative max-loss answer.
+        ub.update({"us_ig": 0.0, "us_agg": 0.0, "ust_int": 0.40, "tips": 0.20})
+        lb["cash"] = 0.40
     bnds = [(lb[k], ub[k]) for k in cma.keys]
 
     eq = cma.mask(EQUITY_KEYS).astype(float)
@@ -100,6 +104,9 @@ def _feasible_start(cma: CMA, t: int, bnds) -> np.ndarray:
         for k, s in mix.items():
             w[cma.idx(k)] = s * e
     rest = 1 - e
+    if t == 0:
+        w[cma.idx("cash")], w[cma.idx("ust_int")], w[cma.idx("tips")] = 0.40, 0.40, 0.20
+        return w
     w[cma.idx("cash")] = 0.02
     w[cma.idx("us_agg")] = rest - 0.02
     return w
@@ -129,12 +136,18 @@ def build_models(cma: CMA | None = None, n_resample: int = 150, t_eff: float = 2
     return models
 
 
+_MODELS: dict[str, pd.DataFrame] = {}
+
+
 def load_models(rebuild: bool = False) -> pd.DataFrame:
     if rebuild or not MODEL_FILE.exists():
         m = build_models()
         m.to_csv(MODEL_FILE, float_format="%.4f")
+        _MODELS["m"] = m
         return m
-    return pd.read_csv(MODEL_FILE, index_col="tier")
+    if "m" not in _MODELS:
+        _MODELS["m"] = pd.read_csv(MODEL_FILE, index_col="tier")
+    return _MODELS["m"]
 
 
 def model_weights(t: int, models: pd.DataFrame | None = None) -> np.ndarray:

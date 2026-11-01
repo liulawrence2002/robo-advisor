@@ -86,8 +86,9 @@ def survival_table(sex: str, age: int, health: str = "average") -> dict:
 def joint_survival(sex1: str, age1: int, sex2: str, age2: int, health1="average", health2="average") -> dict:
     """Probability at least one of two partners is alive, indexed by years from today."""
     q1, q2 = annual_death_probs(sex1, age1, health1), annual_death_probs(sex2, age2, health2)
-    n = min(len(q1), len(q2))
-    s1, s2 = np.cumprod(1 - q1[:n]), np.cumprod(1 - q2[:n])
+    n = max(len(q1), len(q2))          # run to the younger partner's horizon; the older is dead past 115
+    s1 = np.pad(np.cumprod(1 - q1), (0, n - len(q1)))
+    s2 = np.pad(np.cumprod(1 - q2), (0, n - len(q2)))
     either = 1 - (1 - s1) * (1 - s2)
     years = np.arange(1, n + 1)
     hit = years[either <= 0.25]

@@ -4,17 +4,22 @@ The fields mirror the "investment profile" that FINRA Rule 2111 and Reg BI requi
 broker-dealer to make reasonable efforts to obtain (age, other investments, financial
 situation and needs, tax status, investment objectives, experience, time horizon,
 liquidity needs, risk tolerance), plus the account-opening items banks collect under
-the Customer Identification Program (31 CFR 1023.220), FINRA Rule 4512 (trusted
-contact), Rule 3210 (accounts at other broker-dealers), and options/futures account
-approval (FINRA Rule 2360, NFA Rule 2-30).
+the Customer Identification Program (31 CFR 1023.220), FinCEN's customer due diligence
+rule (beneficial ownership, source of wealth, PEP screening), FATCA/CRS tax residency,
+FINRA Rule 4512 (trusted contact), Rule 3210 (accounts at other broker-dealers), Rule
+2165 (seniors), Rule 144 / 10b5-1 (insiders), and options/futures account approval
+(FINRA Rule 2360, NFA Rule 2-30).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
+from datetime import date
 from typing import Literal
 
 Priority = Literal["need", "want", "wish"]
 GoalKind = Literal["retirement", "home", "education", "bequest", "other"]
+
+PROFILE_MAX_AGE_MONTHS = 36      # SEC 17a-3(a)(17): account record refreshed at least every 36 months
 
 
 # ---------------------------------------------------------------- account-opening KYC
@@ -22,15 +27,33 @@ GoalKind = Literal["retirement", "home", "education", "bequest", "other"]
 class Identity:
     full_name: str = "Client"
     citizenship: Literal["US citizen", "US resident alien", "Non-resident alien"] = "US citizen"
+    tax_residency: Literal["US only", "US and another country", "Outside the US"] = "US only"   # FATCA / CRS
     state: str = "NY"
+    account_type: Literal["individual", "joint", "IRA only", "trust", "LLC / corporation"] = "individual"
+    beneficial_owners_verified: bool = True      # FinCEN CDD rule: owners >= 25% and a control person (entities)
     employment_status: Literal["employed", "self-employed", "retired", "not employed"] = "employed"
     occupation: str = ""
+    employer: str = ""
+    source_of_wealth: Literal["salary and savings", "business ownership", "inheritance or gift",
+                              "sale of a business or property", "legal settlement", "crypto or trading gains",
+                              "other"] = "salary and savings"
+    expected_initial_funding: float = 0.0        # $ the client plans to deposit (CDD expected activity)
     employed_by_broker_dealer: bool = False      # FINRA Rule 3210 / 3110 consent letter
     control_person_public_co: bool = False       # officer/director/10% holder -> Rule 144 limits
+    insider_ticker: str = ""                     # issuer of the controlled stock
+    has_10b5_1_plan: bool = False                # pre-arranged trading plan (Rule 10b5-1)
+    issuer_permits_hedging: bool = False         # most issuer policies ban hedging by insiders (Reg S-K 407(i))
     politically_exposed: bool = False            # enhanced due diligence
+    pep_detail: str = ""                         # office held, country, self / family / close associate
+    edd_cleared: bool = False                    # senior-management sign-off on enhanced due diligence
     identity_verified: bool = True               # CIP documentary / non-documentary verification
+    id_method: Literal["documentary", "non-documentary", "pending"] = "documentary"
     ofac_clear: bool = True                      # sanctions screening result
     trusted_contact: str = ""                    # FINRA Rule 4512
+    trusted_contact_declined: bool = False       # client was asked and declined (the rule requires the ask)
+    power_of_attorney: str = ""                  # POA / guardian on file (seniors, diminished capacity)
+    profile_date: str = ""                       # ISO date the profile was last confirmed ("" = today)
+    form_crs_acknowledged: bool = True           # Form CRS / ADV Part 2 delivered and acknowledged
 
 
 @dataclass
@@ -43,6 +66,8 @@ class Household:
     spouse_sex: Literal["male", "female"] | None = None
     spouse_health: Literal["excellent", "good", "average", "fair", "poor"] = "average"
     dependents: int = 0
+    long_term_care_insured: bool = False
+    life_insured: bool = True                    # term cover in force (human-capital protection)
 
 
 @dataclass
@@ -60,10 +85,13 @@ class Finances:
     cash: float = 0.0                       # bank deposits (emergency fund)
     taxable_cost_basis_pct: float = 0.7     # basis / market value in taxable account
     concentrated_stock: float = 0.0         # single-stock position held inside taxable (subset)
+    concentrated_ticker: str = ""           # for live pricing / fair value of the position
     home_value: float = 0.0
     mortgage: float = 0.0
     other_debt: float = 0.0
+    other_debt_rate: float = 0.07           # interest rate on non-mortgage debt (pay-down vs invest test)
     monthly_essential_expenses: float = 4_000
+    liquidity_need_12m: float = 0.0         # planned withdrawals within 12 months (FINRA 2111 liquidity needs)
     retirement_age: int = 65
     retirement_spending: float = 60_000     # desired annual spending in retirement, today's $
     essential_share_of_spending: float = 0.7
@@ -73,8 +101,10 @@ class Finances:
     spouse_ss_claim_age: int = 67
     already_claiming_ss: bool = False
     pension: float = 0.0                    # annual, today's $, starts at retirement
-    ordinary_tax_rate: float = 0.22         # marginal federal+state on ordinary income
+    ordinary_tax_rate: float = 0.22         # marginal rate today (fed + state), used for Roth/traditional advice
     cap_gains_rate: float = 0.15
+    state_tax_rate: float = 0.05            # flat state rate on ordinary income in the projection
+    advisory_fee: float = 0.0025            # annual advisory fee charged on managed assets (Form CRS)
 
     @property
     def household_income(self) -> float:
@@ -92,6 +122,11 @@ class Finances:
     def net_worth(self) -> float:
         return self.liquid_net_worth + self.home_value - self.mortgage
 
+    @property
+    def net_worth_ex_home(self) -> float:
+        """Reg D 501(a): primary residence and its mortgage (up to the home's value) are excluded."""
+        return self.investable + self.cash - self.other_debt - max(self.mortgage - self.home_value, 0.0)
+
 
 @dataclass
 class Goal:
@@ -108,13 +143,18 @@ class Goal:
 class Experience:
     years_investing: int = 0
     knowledge: Literal["none", "limited", "good", "extensive"] = "limited"
+    stock_years: int = 0                    # FINRA 2360(b)(16): experience by product
+    bond_years: int = 0
     options_years: int = 0
+    options_trades_per_year: int = 0
     futures_years: int = 0
     objective: Literal["preservation", "income", "growth", "speculation"] = "growth"
     options_disclosure_ack: bool = False    # received Characteristics & Risks of Standardized Options
     futures_disclosure_ack: bool = False    # CFTC Rule 1.55 risk disclosure acknowledged
     wants_margin: bool = False
     exclude_derivatives: bool = False       # client preference
+    override_tiers: int = 0                 # client's own adjustment to the recommended tier (<0 = safer)
+    override_reason: str = ""
 
 
 @dataclass
@@ -136,18 +176,87 @@ class ClientProfile:
         return next((g for g in self.goals if g.kind == "retirement"), None)
 
     @property
+    def is_retired(self) -> bool:
+        """One definition for every module: stated retired, or past the retirement age."""
+        return self.identity.employment_status == "retired" or self.household.age >= self.finances.retirement_age
+
+    @property
+    def effective_retirement_age(self) -> int:
+        """Age from which the plan treats the client as retired (a retiree at 60 with a planned
+        'retirement age' of 65 is retired now)."""
+        return min(self.finances.retirement_age, self.household.age) if self.is_retired else self.finances.retirement_age
+
+    @property
+    def filing_status(self) -> str:
+        return "mfj" if self.household.marital_status == "married" else "single"
+
+    @property
     def is_accredited(self) -> bool:
         """Reg D Rule 501(a): $1M net worth ex-primary residence, or income > $200k ($300k joint)."""
         f, h = self.finances, self.household
         joint = h.marital_status == "married"
-        nw_ex_home = f.liquid_net_worth
         income = f.household_income if joint else f.annual_income
-        return nw_ex_home >= 1_000_000 or income > (300_000 if joint else 200_000)
+        return f.net_worth_ex_home >= 1_000_000 or income > (300_000 if joint else 200_000)
+
+    @property
+    def is_qualified_client(self) -> bool:
+        """Advisers Act Rule 205-3: $2.2M net worth (performance fees allowed)."""
+        return self.finances.net_worth_ex_home >= 2_200_000
 
     @property
     def is_senior(self) -> bool:
         """FINRA Rule 2165 'specified adult' (65+): enables temporary holds for exploitation."""
         return self.household.age >= 65
+
+    @property
+    def profile_age_months(self) -> int:
+        if not self.identity.profile_date:
+            return 0
+        try:
+            d = date.fromisoformat(self.identity.profile_date)
+        except ValueError:
+            return 0
+        today = date.today()
+        return max((today.year - d.year) * 12 + today.month - d.month, 0)
+
+    def kyc_status(self) -> tuple[str, list[str]]:
+        """Account-opening gate.
+
+        'blocked'  the account cannot be opened (CIP failed, sanctions hit, beneficial owners unknown)
+        'hold'     the profile and risk analysis can be shown, but no trades until compliance clears it
+                   (PEP without EDD sign-off, high-risk source of wealth, non-documentary pending)
+        'cleared'  normal processing
+        """
+        i = self.identity
+        why = []
+        status = "cleared"
+        if not i.identity_verified or i.id_method == "pending":
+            status = "blocked"; why.append("Identity not verified (CIP, 31 CFR 1023.220): no account until documentary "
+                                           "or non-documentary verification is complete.")
+        if not i.ofac_clear:
+            status = "blocked"; why.append("Sanctions screening hit (OFAC): account opening is prohibited; the match must "
+                                           "be cleared or the SAR/blocking process followed.")
+        if i.account_type in ("trust", "LLC / corporation") and not i.beneficial_owners_verified:
+            status = "blocked"; why.append("Legal-entity account without verified beneficial owners (FinCEN CDD rule, "
+                                           "31 CFR 1010.230).")
+        if status == "blocked":
+            return status, why
+        if i.politically_exposed and not i.edd_cleared:
+            status = "hold"; why.append("Politically exposed person: enhanced due diligence and senior-management "
+                                        "approval required before the account is funded.")
+        if i.source_of_wealth in ("crypto or trading gains", "legal settlement", "other"):
+            status = "hold"; why.append(f"Source of wealth '{i.source_of_wealth}' is higher risk under the bank's "
+                                        "customer risk rating: document the source of funds before trading.")
+        if i.citizenship == "Non-resident alien" and i.tax_residency == "US only":
+            status = "hold"; why.append("Non-resident alien with US-only tax residency is inconsistent: collect W-8BEN "
+                                        "and the country of tax residence (FATCA/CRS).")
+        if self.is_senior and not i.trusted_contact and not i.trusted_contact_declined:
+            why.append("Specified adult without a trusted contact on file: FINRA 4512 requires a reasonable effort to "
+                       "obtain one (does not block the account).")
+        if self.profile_age_months > PROFILE_MAX_AGE_MONTHS:
+            status = "hold"; why.append(f"Investment profile is {self.profile_age_months} months old: refresh before "
+                                        f"relying on it (SEC Rule 17a-3: {PROFILE_MAX_AGE_MONTHS}-month cycle).")
+        return status, why
 
 
 # ---------------------------------------------------------------- risk tolerance questionnaire
@@ -197,12 +306,19 @@ GAMBLE_QUESTIONS = [
 ]
 
 
+def _construct(cls, d: dict):
+    """Build a dataclass from a dict, ignoring unknown keys and filling new fields with defaults
+    (so audit files and cached profiles written by older versions still load)."""
+    known = {f.name for f in fields(cls)}
+    return cls(**{k: v for k, v in d.items() if k in known})
+
+
 def profile_from_dict(d: dict) -> ClientProfile:
     """Inverse of ClientProfile.to_dict (used for caching and the audit file)."""
     return ClientProfile(
-        identity=Identity(**d["identity"]), household=Household(**d["household"]),
-        finances=Finances(**d["finances"]), goals=[Goal(**g) for g in d["goals"]],
-        experience=Experience(**d["experience"]), risk_answers=dict(d["risk_answers"]),
+        identity=_construct(Identity, d["identity"]), household=_construct(Household, d["household"]),
+        finances=_construct(Finances, d["finances"]), goals=[_construct(Goal, g) for g in d["goals"]],
+        experience=_construct(Experience, d["experience"]), risk_answers=dict(d["risk_answers"]),
         gamble_answers=dict(d["gamble_answers"]), label=d.get("label", "Custom client"))
 
 
@@ -210,12 +326,37 @@ def questionnaire_score(answers: dict[str, int]) -> tuple[float, int]:
     """Return (0..100 score, number of answered items)."""
     pts, n = 0.0, 0
     for q in QUESTIONS:
-        if q["id"] in answers:
+        if q["id"] in answers and answers[q["id"]] is not None:
             pts += q["scores"][answers[q["id"]]]
             n += 1
     if n == 0:
         return 50.0, 0
     return 100.0 * pts / (4 * n), n
+
+
+def consistency_checks(answers: dict[str, int], age: int, objective: str) -> tuple[dict[str, int], list[str]]:
+    """SEC IM Guidance 2017-02 asks robo-advisers to detect and address inconsistent answers.
+
+    Returns (adjusted answers used for scoring, review flags). Adjustments always move toward
+    the more conservative answer; nothing here raises risk.
+    """
+    a = {k: v for k, v in answers.items() if v is not None}
+    flags = []
+    if a.get("q1_self", 0) >= 3 and a.get("q5_maxloss", 9) <= 1:
+        flags.append("Self-rated risk willingness is high, but the largest acceptable loss is 10% or less. The loss "
+                     "limit governs; an advisor should confirm which answer reflects the client.")
+    if a.get("q3_drop", 0) == 3 and a.get("q4_history", 9) <= 1:
+        a["q3_drop"] = a["q4_history"]       # revealed behaviour outweighs the hypothetical
+        flags.append("Says they would buy more in a 20% fall, but sold in 2020 or 2022. Scored on what they actually did.")
+    if "q5_maxloss" in a and a.get("q6_portfolio", 0) > a["q5_maxloss"] + 1:
+        a["q6_portfolio"] = a["q5_maxloss"]  # chosen outcome range implies losses beyond the stated limit
+        flags.append("The chosen $100,000 outcome range implies a bigger loss than the stated maximum. The more "
+                     "conservative answer is used.")
+    score, _ = questionnaire_score(a)
+    if score > 75 and (age >= 70 or objective == "preservation"):
+        flags.append(f"Tolerance score {score:.0f}/100 with " + ("age 70+" if age >= 70 else "a preservation objective") +
+                     ": suitability review by an advisor before an aggressive allocation is implemented.")
+    return a, flags
 
 
 def gamble_gamma(gamble: dict[str, int]) -> tuple[float | None, str]:
@@ -238,3 +379,29 @@ def answers_from_labels(labels: dict[str, str]) -> dict[str, int]:
         if q["id"] in labels:
             out[q["id"]] = q["options"].index(labels[q["id"]])
     return out
+
+
+def validate_goals(goals: list[Goal], horizon_years: int) -> tuple[list[Goal], list[str]]:
+    """Clean user-entered goals: drop blanks, de-duplicate names, clamp dates to the plan horizon.
+    Returns (clean goals, warnings)."""
+    import math
+    out, seen, warn = [], {}, []
+    for g in goals:
+        amt = float(g.amount) if g.amount is not None and not (isinstance(g.amount, float) and math.isnan(g.amount)) else 0.0
+        yrs = g.years_until if g.years_until is not None and not (isinstance(g.years_until, float) and math.isnan(g.years_until)) else 0
+        dur = g.duration_years if g.duration_years is not None and not (isinstance(g.duration_years, float) and math.isnan(g.duration_years)) else 1
+        name = str(g.name).strip()
+        if not name or amt <= 0:
+            continue
+        yrs, dur = int(max(yrs, 0)), int(max(dur, 1))
+        if g.kind != "retirement" and yrs > horizon_years:
+            warn.append(f"'{name}' is dated {yrs} years out, beyond the planning horizon ({horizon_years} years); "
+                        f"it is moved to year {horizon_years}.")
+            yrs = horizon_years
+        if name in seen:
+            seen[name] += 1
+            name = f"{name} ({seen[name]})"
+        else:
+            seen[name] = 1
+        out.append(Goal(name, g.kind, amt, yrs, dur, g.priority, g.funded_from_taxable))
+    return out, warn
