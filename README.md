@@ -62,8 +62,8 @@ and editable in the app.
 
 | File | What it does |
 |---|---|
-| `app.py` | Streamlit front end: Overview, 7-step Profile, Risk, Portfolio, Projections, Options & Futures, Markets & Valuation, Compliance, Compare, Methodology |
-| `ui.py`, `.streamlit/config.toml` | Visual system: theme, fonts, card and chart components |
+| `app.py` | Streamlit front end, one scrolling page: client switcher and settings at the top, hero, then Profile, Plan, Risk, Portfolio, Projections, Options & futures, Markets & valuation, Compliance, Compare, Methodology |
+| `ui.py`, `.streamlit/config.toml` | Visual system: single-scroll editorial layout, fonts, card and chart components, anime.js runtime for the hero reveal, count-ups and scroll-triggered reveals |
 | `robo/kyc.py` | Client data model, account gate, risk questionnaire, consistency checks |
 | `robo/risk.py` | Willingness, ability and need; stress-loss cap; capacity score; client override; glide path |
 | `robo/portfolio.py` | Model portfolios by resampled mean-variance optimization |
