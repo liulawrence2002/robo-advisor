@@ -7,7 +7,9 @@ from datetime import date
 
 import numpy as np
 
+from . import aml
 from .advisor import LIMITATIONS, Recommendation
+from .audit import build_log
 from .goals import planning_age
 
 
@@ -51,6 +53,8 @@ td{padding:6px 8px;border-bottom:1px solid #EEE7DA;vertical-align:top}.kpis{disp
 ol li{margin:6px 0}.flag{border-left:3px solid #8C3B3B;padding:4px 10px;margin:6px 0;background:#FBF6EE}.review{border-left-color:#A8823F}
 .stop{border:2px solid #8C3B3B;padding:10px 14px;background:#FBF0EE;margin:12px 0}.sig{margin-top:40px;display:flex;gap:40px}
 .sig div{flex:1;border-top:1px solid #18222F;padding-top:6px;font-size:12px;color:#6B7480}.small{font-size:12px;color:#6B7480}
+.log td{font-size:12px}.log .r{font-weight:700;white-space:nowrap}.PASS{color:#0E6B52}.INFO{color:#4E6B92}.OPEN{color:#1E3658}
+.REVIEW{color:#B07A17}.FAIL{color:#B0323F}
 @media print{body{margin:0}h2{page-break-after:avoid}}
 """
 
@@ -62,11 +66,11 @@ def build_report(rec: Recommendation, firm: str = "Keel & Co.", sim_label: str =
     today = date.today().strftime("%B %d, %Y")
     parts = [f"<!doctype html><html><head><meta charset='utf-8'><title>{_e(firm)} client report</title><style>{CSS}</style></head><body>"]
     parts.append(f"<div class='eyebrow'>{_e(firm)} · Goals-based advice · Investment policy statement</div>"
-                 f"<h1>{_e(p.identity.full_name)}</h1><div class='meta'>Prepared {today} · profile {_e(p.identity.profile_date or today)} · "
+                 f"<h1>{_e(p.identity.full_name or 'Applicant')}</h1><div class='meta'>Prepared {today} · profile {_e(p.identity.profile_date or today)} · "
                  f"{_e(p.label)} · simulation {_e(sim_label)}</div>")
     if el.kyc_status != "cleared":
-        parts.append(f"<div class='stop'><strong>Account status: {el.kyc_status.upper()}.</strong> " +
-                     " ".join(_e(r) for r in el.kyc_reasons) + "</div>")
+        parts.append(f"<div class='stop'><strong>Account status: {_e(aml.STATUS_LABEL[el.kyc_status])}.</strong> " +
+                     " ".join(_md(r) for r in el.kyc_reasons) + "</div>")
 
     parts.append("<h2>1. Summary</h2><div class='kpis'>"
                  f"<div class='kpi'><span>Plan success to {PA}</span><b>{_p(sim.success)}</b>{_p(sim.success_full)} with no cut</div>"
@@ -155,7 +159,45 @@ def build_report(rec: Recommendation, firm: str = "Keel & Co.", sim_label: str =
     parts.append(_table(["Item", "Status", "Evidence"], [[n, "pass" if ok else "FAIL", ev] for n, ok, ev in rec.checklist]))
     parts.append("<ul>" + "".join(f"<li>{_e(n)}</li>" for n in el.notes) + "</ul>")
 
-    parts.append("<h2>8. What this tool does not do</h2>")
+    i = p.identity
+    rating = aml.risk_rating(p)
+    parts.append("<h2>8. Account-opening record (CIP, customer due diligence, sanctions)</h2>")
+    age = aml.age_on(i.date_of_birth)
+    addr = ", ".join(x for x in (i.address_line, i.address_city, f"{i.state} {i.address_zip}".strip(), i.address_country) if x)
+    parts.append(_table(["Item", "On file"], [
+        ["Account status", f"{aml.STATUS_LABEL[el.kyc_status]}: {aml.STATUS_TITLE[el.kyc_status].lower()}"
+                           + (f"; accepted by {i.principal_name}" if i.principal_approved and i.principal_name else "")],
+        ["Legal name / date of birth", f"{i.full_name or 'not provided'}; {i.date_of_birth or 'not provided'}" + (f" (age {age})" if age is not None else "")],
+        ["Home address", addr or "not provided"],
+        ["Identification", f"{i.tin_type} {i.tin_masked or 'not provided'}; {i.id_doc_type} {i.id_doc_masked or 'not provided'}"
+                           + (f", expires {i.id_doc_expiry}" if i.id_doc_expiry else "")],
+        ["Identity verification", i.id_verification + ("; red flags: " + "; ".join(i.id_theft_flags) if i.id_theft_flags else "")],
+        ["Account", f"{aml.ACCOUNT_LABEL.get(i.account_type, i.account_type)}; {i.account_purpose.lower()}"
+                    + (f"; joint owner {i.joint_owner.get('name')}" if i.joint_owner.get("name") else "")
+                    + (f"; {i.entity.get('legal_name')}" if i.entity.get("legal_name") else "")],
+        ["Source of wealth / funds", f"{i.source_of_wealth}; {i.source_of_funds}; initial {_m(i.expected_initial_funding)}, "
+                                     f"{_m(i.expected_annual_deposits)}/yr after; withdrawals {i.expected_withdrawals.lower()}"],
+        ["Sanctions screening", (f"{len(i.ofac_hits)} potential match(es); disposition: {i.ofac_disposition.lower()}" if i.ofac_hits
+                                 else "no potential match") + (f" ({i.screening_source})" if i.screening_source else "")],
+        ["Political exposure / adverse media", f"{i.pep_type if i.politically_exposed else 'none'}; {i.adverse_media.lower()}"],
+        ["Customer AML risk rating", f"{rating.level} ({rating.score}/100); review every {rating.review_months} months; enhanced due "
+                                     f"diligence {'required: ' + '; '.join(rating.edd_reasons) if rating.edd_required else 'not required'}"],
+    ]))
+    parts.append(_table(["Risk factor", "Points", "Why"], rating.table()))
+
+    parts.append("<h2>9. Audit log and practitioner instructions</h2>")
+    parts.append("<p class='small'>One line per control. PASS: satisfied. INFO: recorded, no action. OPEN: the applicant owes an item. "
+                 "REVIEW: a firm decision is needed and the account is restricted. FAIL: hard stop.</p>")
+    log = build_log(p, el.kyc_status, rec.checklist)
+    rows = "".join(
+        f"<tr><td>{ln['seq']:02d}</td><td>{_e(ln['code'])}</td><td><strong>{_e(ln['check'])}</strong><br>{_md(ln['evidence'])}</td>"
+        f"<td class='r {ln['result']}'>{ln['result']}</td><td>{_md(ln['action'])}</td><td>{_md(ln['rule'])}<br><em>Keep: {_md(ln['retain'])}</em></td></tr>"
+        for ln in log)
+    parts.append("<table class='log'><thead><tr><th>#</th><th>Code</th><th>Check and evidence</th><th>Result</th>"
+                 f"<th>What to do now</th><th>Rule and retention</th></tr></thead><tbody>{rows}</tbody></table>")
+    parts.append(f"<p class='small'>Evaluated {log[0]['time']} UTC; chain hash {log[-1]['hash']}.</p>")
+
+    parts.append("<h2>10. What this tool does not do</h2>")
     parts.append(_table(["Area", "Limitation"], [[a, b] for a, b in LIMITATIONS]))
     parts.append("<p class='small'>Projections are hypothetical, not guarantees. Return assumptions: J.P. Morgan Asset Management 2026 "
                  "Long-Term Capital Market Assumptions; volatility and correlation from ETF history 2010-2026; mortality SSA 2022; "

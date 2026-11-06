@@ -15,7 +15,12 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import ui
+from robo import aml, sanctions
 from robo.advisor import LIMITATIONS, Recommendation, advise
+from robo.audit import RESULTS as AUDIT_RESULTS
+from robo.audit import build_log
+from robo.audit import summary as log_summary
+from robo.audit import to_csv as log_csv
 from robo.cases import CASES
 from robo.cma import STRESS_PATHS, load_cma, portfolio_stats, stress_returns
 from robo.derivatives import Market, futures_hedge, option_cost, payoff_curve, skew_vol, zero_cost_call_strike
@@ -41,7 +46,7 @@ NAME = dict(zip(CMA.keys, CMA.names))
 C = ui.ASSET_COLORS
 CLIENTS = {"A": "Early-career saver", "B": "Pre-retiree", "C": "Retired couple", "Custom": "New client"}
 CLIENT_CAPTIONS = {"A": "Age 30 · house in 2 yrs · retire at 65", "B": "Age 55 · $200K saved · retire at 67",
-                   "C": "Age 70 · $2M · married", "Custom": "Blank profile and questionnaire"}
+                   "C": "Age 70 · $2M · married", "Custom": "Blank application and questionnaire"}
 HEADLINES = {"A": "Buy the house, <em>then</em> build the retirement",
              "B": "Twelve years to <em>close the gap</em>",
              "C": "Turning two million into <em>income for life</em>",
@@ -88,6 +93,12 @@ def get_macro(use_live: bool) -> dict:
     return macro_snapshot(use_live)
 
 
+@st.cache_resource(ttl=6 * 3600, show_spinner=False)
+def get_sdn(use_live: bool):
+    """OFAC SDN list with aliases and a token index; the built-in synthetic sample when offline."""
+    return sanctions.load_list(use_live)
+
+
 @st.cache_data(show_spinner=False, max_entries=48)
 def cached_advice(profile_json: str, cfg_json: str, market_json: str, prices_json: str,
                   stock_vol: float | None, stock_info_json: str, light: bool = False) -> Recommendation:
@@ -108,13 +119,53 @@ def cached_methodology():
 
 
 # ======================================================================== profile (KYC) form
+CIP_NOTICE = ("**Important information about procedures for opening a new account.** To help the government fight the funding "
+              "of terrorism and money laundering activities, Federal law requires all financial institutions to obtain, verify, "
+              "and record information that identifies each person who opens an account. What this means for you: when you open "
+              "an account, we will ask for your name, address, date of birth and other information that will allow us to "
+              "identify you. We may also ask to see your driver's license or other identifying documents.")
+SAMPLE_SSN = "987-65-43"       # + two digits: the 987-65-432x range is reserved for advertising and never issued
+STATUS_SUMMARY = {
+    "cleared": "Every control passed and a principal accepted the account. It is open for funding and trading, and the "
+               "recommendation below can be implemented.",
+    "hold": "The application is in good order, but a firm review is still open. The account is restricted (no trading, no "
+            "withdrawals) until the items below are cleared on the firm-review panel. The plan is shown; overlays wait.",
+    "incomplete": "Some required items are missing, so nothing has been opened. The plan below is a **proposal only**, the "
+                  "way a prospect sees one before applying. Complete the steps marked with a number.",
+    "blocked": "A hard stop was hit. The account cannot be opened and no recommendation is implemented; the file goes to "
+               "the AML officer.",
+}
+
+
+def _sample_identity() -> Identity:
+    """A fictional applicant with a complete application; the firm review is left undone."""
+    t = date.today()
+    return Identity(full_name="Jordan A. Rivera", enforce_intake=True, date_of_birth=date(t.year - 38, 5, 9).isoformat(),
+                    tin_type="SSN", tin_masked="XXX-XX-4325", tin_valid=True, address_line="88 Beacon Street, Unit 4",
+                    address_city="Boston", state="MA", address_zip="02108", phone="(617) 555-0134",
+                    email="jordan.rivera@example.com", id_doc_type="Driver's license", id_doc_masked="XXXX1342",
+                    id_doc_issuer="MA", id_doc_expiry=date(t.year + 4, 5, 9).isoformat(), occupation="Product manager",
+                    employer="Harborview Software", expected_initial_funding=60_000, expected_annual_deposits=18_000,
+                    trusted_contact="Elena Rivera (sister)", trusted_contact_info="(617) 555-0190", tax_cert_signed=True,
+                    cip_notice_ack=True, form_crs_acknowledged=True, privacy_notice_ack=True, esign_consent=True,
+                    agreement_signed=True, signature_name="Jordan A. Rivera", id_verification=aml.ID_VERIFY[2])
+
+
 def _default_profile(k: str) -> ClientProfile:
     if k in CASES:
         return CASES[k]()
-    return ClientProfile(label="New client", identity=Identity(full_name="New client"),
-                         household=Household(age=40, sex="female"),
+    ident = _sample_identity() if st.session_state.get("custom_sample") else Identity(
+        full_name="", enforce_intake=True, id_verification=aml.ID_VERIFY[2], form_crs_acknowledged=False)
+    return ClientProfile(label="New client", identity=ident, household=Household(age=40, sex="female"),
                          finances=Finances(taxable=50_000, traditional=100_000, roth=20_000, cash=20_000),
                          goals=[], experience=Experience())
+
+
+def _set_sample(on: bool) -> None:
+    """Button callback: load or clear the sample applicant. Bumping the version gives the application
+    widgets new keys, so they are rebuilt from the new defaults."""
+    st.session_state["custom_sample"] = on
+    st.session_state["custom_ver"] = st.session_state.get("custom_ver", 0) + 1
 
 
 def _idx(options, value):
@@ -129,73 +180,339 @@ def _num(v, default):
         return default
 
 
-def kyc_form(k: str) -> ClientProfile:
+def _date(iso: str):
+    return aml.parse_date(iso)
+
+
+def _sample_raw(masked: str) -> str:
+    """Pre-fill for the sample clients: a number from the reserved advertising range ending in the stored last four."""
+    d = aml.digits(masked)
+    return f"{SAMPLE_SSN}{d[-2:]}" if len(d) >= 2 else ""
+
+
+@st.cache_data(show_spinner=False, max_entries=256)
+def screen_parties(parties: tuple, list_stamp: str, _sl) -> list[dict]:
+    """Sanctions hits for every party to the account, as plain dicts (cached per name set and list version)."""
+    out = []
+    for role, name, dob, is_entity in parties:
+        for h in sanctions.screen(_sl, name, dob, party=role, entity=is_entity):
+            d = dataclasses.asdict(h)
+            d["summary"] = h.describe()
+            out.append(d)
+    return out
+
+
+def kyc_form(k: str, sdn) -> ClientProfile:
     b = _default_profile(k)
     i, h, f, x = b.identity, b.household, b.finances, b.experience
     K = lambda s: f"{k}_{s}"
+    ver = st.session_state.get("custom_ver", 0) if k == "Custom" else 0
+    KA = lambda s: f"{k}{ver}_{s}"            # application and firm-review widgets (rebuilt when the sample is loaded)
     HEALTH = ["excellent", "good", "average", "fair", "poor"]
     MARITAL = ["single", "married", "divorced", "widowed"]
     blank = k == "Custom"
-    steps = st.tabs(["01  Identity & AML", "02  Household", "03  Balance sheet", "04  Retirement & tax", "05  Goals",
-                     "06  Experience & approvals", "07  Risk questionnaire"])
+    today = date.today()
 
-    with steps[0], st.container(key="card_kyc_identity"):
-        st.caption("Why we ask: identity is verified under the Customer Identification Program (31 CFR 1023.220), screened "
-                   "against OFAC, and risk-rated under FinCEN's customer due diligence rule before an account can open. A "
-                   "failed check blocks the account; a pending review puts trading on hold. This demo does not collect an SSN.")
+    # ------------------------------------------------------------------ A. account application
+    ui.part("A", "Account application", "What the firm must collect, by law, before it can open an account. "
+            "Four short steps; the status panel underneath shows what is still outstanding.")
+    if blank:
+        c = st.columns([1.25, 1.05, 3])
+        c[0].button("Fill with a sample applicant", on_click=_set_sample, args=(True,), key="custom_fill", width="stretch",
+                    help="Fills the four application steps with a fictional person so you can see the full workflow. "
+                         "The firm-review panel is left for you.")
+        c[1].button("Clear the application", on_click=_set_sample, args=(False,), key="custom_clear", width="stretch")
+        c[2].caption("New client: the application starts empty. Until it is complete the plan below is shown as a proposal, "
+                     "not an open account.")
+    sa = st.tabs(["01  Applicant", "02  Account & funding", "03  Regulatory questions", "04  Agreements & signature"])
+
+    with sa[0], st.container(key="card_kyc_applicant"):
+        st.caption("Why we ask: the Customer Identification Program (31 CFR 1023.220) requires your legal name, date of birth, "
+                   "home address and an identification number before an account opens, and that we verify them.")
+        ui.group("Legal name and date of birth", first=True)
+        parts = i.full_name.split()
+        c = st.columns([1.2, 0.7, 1.2, 1])
+        first = c[0].text_input("Legal first name", parts[0] if parts else "", key=KA("first"))
+        middle = c[1].text_input("Middle", " ".join(parts[1:-1]) if len(parts) > 2 else "", key=KA("middle"))
+        last = c[2].text_input("Legal last name", parts[-1] if len(parts) > 1 else "", key=KA("last"))
+        dob = c[3].date_input("Date of birth", _date(i.date_of_birth), min_value=date(1900, 1, 1), max_value=today,
+                              format="MM/DD/YYYY", key=KA("dob"))
+        full_name = " ".join(s.strip() for s in (first, middle, last) if s.strip())
+
+        ui.group("Citizenship and identification number")
         c = st.columns(4)
-        full_name = c[0].text_input("Legal name", i.full_name, key=K("name"))
-        cit_opts = ["US citizen", "US resident alien", "Non-resident alien"]
-        citizenship = c[1].selectbox("Citizenship", cit_opts, index=_idx(cit_opts, i.citizenship), key=K("cit"))
-        res_opts = ["US only", "US and another country", "Outside the US"]
-        tax_res = c[2].selectbox("Tax residency (FATCA / CRS)", res_opts, index=_idx(res_opts, i.tax_residency), key=K("res"))
-        state = c[3].text_input("State of residence", i.state, key=K("state"))
+        citizenship = c[0].selectbox("Citizenship status", aml.CITIZENSHIP, index=_idx(aml.CITIZENSHIP, i.citizenship), key=KA("cit"))
+        us_cit = citizenship == "US citizen"
+        ctry_cit = c[1].selectbox("Country of citizenship", aml.COUNTRIES, index=_idx(aml.COUNTRIES, i.country_of_citizenship),
+                                  key=KA("citctry"), disabled=us_cit)
+        ctry_cit = aml.US if us_cit else ctry_cit
+        tin_opts = aml.TIN_TYPES if citizenship == "Non-resident alien" else [t for t in aml.TIN_TYPES if not t.startswith("Foreign")]
+        tin_type = c[2].selectbox("Identification number type", tin_opts, index=_idx(tin_opts, i.tin_type), key=KA("tintype"))
+        tin_raw = c[3].text_input("Number", _sample_raw(i.tin_masked), type="password", key=KA("tin"),
+                                  disabled=tin_type.startswith("Applied"), placeholder="9 digits",
+                                  help="Demo: never type a real Social Security number. Use the sample 987-65-4321 (a range "
+                                       "reserved for advertising). Only the last four digits are kept.")
+        tin_valid, tin_why = aml.validate_tin(tin_raw, tin_type)
+        tin_masked = aml.mask_tin(tin_raw, tin_type)
+        if tin_type.startswith("Applied"):
+            c[3].caption(":orange[Applied for: we need a copy of the application and the number within 60 days.]")
+        elif tin_raw:
+            c[3].caption(f":green[Valid format · only the last four digits ({tin_masked[-4:]}) are kept]" if tin_valid
+                         else f":red[Not valid: {tin_why}.]")
+
+        ui.group("Home address and contact")
+        c = st.columns([2.2, 1.3, 0.8, 0.9, 1.4])
+        street = c[0].text_input("Street address (not a P.O. box)", i.address_line, key=KA("street"))
+        city = c[1].text_input("City", i.address_city, key=KA("city"))
+        country = c[4].selectbox("Country", aml.COUNTRIES, index=_idx(aml.COUNTRIES, i.address_country), key=KA("country"))
+        state = c[2].selectbox("State", aml.US_STATES, index=_idx(aml.US_STATES, i.state), key=KA("state"), disabled=country != aml.US)
+        zip_ = c[3].text_input("ZIP code", i.address_zip, key=KA("zip"))
+        c = st.columns([1, 1.4, 2])
+        phone = c[0].text_input("Mobile phone", i.phone, key=KA("phone"))
+        email = c[1].text_input("Email", i.email, key=KA("email"))
+        mailing = c[2].text_input("Mailing address, if different", i.mailing_address, key=KA("mailing"))
+        if street and aml.is_po_box(street):
+            st.caption(":red[A P.O. box cannot be the home address. Put it under mailing address and give a street address here.]")
+
+        ui.group("Government-issued photo ID")
         c = st.columns(4)
-        acct_opts = ["individual", "joint", "IRA only", "trust", "LLC / corporation"]
-        acct = c[0].selectbox("Account registration", acct_opts, index=_idx(acct_opts, i.account_type), key=K("acct"))
+        id_type = c[0].selectbox("Document", aml.ID_DOC_TYPES, index=_idx(aml.ID_DOC_TYPES, i.id_doc_type), key=KA("idtype"))
+        id_raw = c[1].text_input("Document number", f"D000{i.id_doc_masked[-4:]}" if i.id_doc_masked else "", key=KA("idnum"),
+                                 help="Only the last four characters are kept.")
+        id_issuer = c[2].text_input("Issuing state or country", i.id_doc_issuer, key=KA("idissuer"))
+        id_exp = c[3].date_input("Expiration date", _date(i.id_doc_expiry), min_value=date(2000, 1, 1),
+                                 max_value=date(today.year + 20, 12, 31), format="MM/DD/YYYY", key=KA("idexp"))
+        if id_exp and id_exp < today:
+            c[3].caption(":red[This ID has expired. An unexpired document is required.]")
+
+        ui.group("Employment")
+        c = st.columns(4)
         emp_opts = ["employed", "self-employed", "retired", "not employed"]
-        employment = c[1].selectbox("Employment status", emp_opts, index=_idx(emp_opts, i.employment_status), key=K("emp"))
-        occupation = c[2].text_input("Occupation", i.occupation, key=K("occ"))
-        employer = c[3].text_input("Employer", i.employer, key=K("employer"))
-        c = st.columns(4)
-        sow_opts = ["salary and savings", "business ownership", "inheritance or gift", "sale of a business or property",
-                    "legal settlement", "crypto or trading gains", "other"]
-        sow = c[0].selectbox("Source of wealth", sow_opts, index=_idx(sow_opts, i.source_of_wealth), key=K("sow"))
-        funding = c[1].number_input("Expected initial funding ($)", 0, 1_000_000_000, int(i.expected_initial_funding), 5_000, key=K("fund"))
-        idm_opts = ["documentary", "non-documentary", "pending"]
-        id_method = c[2].selectbox("CIP verification", idm_opts, index=_idx(idm_opts, i.id_method), key=K("idm"))
-        pdate = c[3].date_input("Profile confirmed on", date.fromisoformat(i.profile_date) if i.profile_date else date.today(),
-                                key=K("pdate"), help="SEC Rule 17a-3: the account record must be refreshed at least every 36 months.")
+        employment = c[0].selectbox("Employment status", emp_opts, index=_idx(emp_opts, i.employment_status), key=KA("emp"))
+        occupation = c[1].text_input("Occupation", i.occupation, key=KA("occ"))
+        employer = c[2].text_input("Employer", i.employer, key=KA("employer"))
+        industry = c[3].selectbox("Is your work or business in any of these?", aml.INDUSTRIES, index=_idx(aml.INDUSTRIES, i.industry),
+                                  key=KA("industry"), help="Industries that handle a lot of cash or move money for others get closer review.")
+
+    with sa[1], st.container(key="card_kyc_account"):
+        st.caption("Why we ask: the customer due diligence rule (31 CFR 1010.230, 1023.210) requires us to understand why you "
+                   "are opening the account, where the money comes from and what activity to expect, and to identify every owner.")
+        ui.group("The account", first=True)
         c = st.columns(3)
-        trusted = c[0].text_input("Trusted contact (FINRA 4512)", i.trusted_contact, key=K("tc"))
-        tc_declined = c[1].checkbox("Client declined to name a trusted contact", i.trusted_contact_declined, key=K("tcd"))
-        poa = c[2].text_input("Power of attorney on file", i.power_of_attorney, key=K("poa"))
-        c = st.columns(6)
-        idv = c[0].checkbox("ID verified", i.identity_verified, key=K("idv"))
-        ofac = c[1].checkbox("OFAC clear", i.ofac_clear, key=K("ofac"))
-        bo = c[2].checkbox("Beneficial owners verified", i.beneficial_owners_verified, key=K("bo"),
-                           help="Entities only: owners of 25%+ and one control person (FinCEN CDD rule).")
-        bd = c[3].checkbox("Works at a broker-dealer", i.employed_by_broker_dealer, key=K("bd"))
-        crs = c[4].checkbox("Form CRS acknowledged", i.form_crs_acknowledged, key=K("crs"))
-        pep = c[5].checkbox("Politically exposed", i.politically_exposed, key=K("pep"))
-        pep_detail, edd = i.pep_detail, i.edd_cleared
-        if pep:
-            c = st.columns([2, 1])
-            pep_detail = c[0].text_input("PEP detail (office, country, self / family / associate)", i.pep_detail, key=K("pepd"))
-            edd = c[1].checkbox("Enhanced due diligence approved", i.edd_cleared, key=K("edd"))
-        ctrl = st.checkbox("Public-company insider (officer, director or 10% holder)", i.control_person_public_co, key=K("ctrl"))
+        acct = c[0].selectbox("Account registration", aml.ACCOUNT_TYPES, index=_idx(aml.ACCOUNT_TYPES, i.account_type),
+                              format_func=aml.ACCOUNT_LABEL.get, key=KA("acct"))
+        purpose = c[1].selectbox("Purpose of the account", aml.PURPOSES, index=_idx(aml.PURPOSES, i.account_purpose), key=KA("purpose"))
+        ira_ben = i.ira_beneficiary
+        if acct == "IRA only":
+            ira_ben = c[2].text_input("Primary beneficiary", i.ira_beneficiary, key=KA("iraben"),
+                                      help="You may revoke a new IRA within 7 days of receiving the disclosure statement.")
+
+        joint, entity, bos, bo_ok = dict(i.joint_owner), dict(i.entity), list(i.beneficial_owners), i.beneficial_owners_verified
+        if acct == "joint":
+            ui.group("Joint owner · each owner is identified separately")
+            j = i.joint_owner
+            c = st.columns([1.6, 1, 1, 1.6])
+            j_name = c[0].text_input("Joint owner's legal name", j.get("name", ""), key=KA("jname"))
+            j_dob = c[1].date_input("Date of birth", _date(j.get("dob", "")), min_value=date(1900, 1, 1), max_value=today,
+                                    format="MM/DD/YYYY", key=KA("jdob"))
+            j_tin = c[2].text_input("SSN or ITIN", _sample_raw(j.get("tin_masked", "")), type="password", key=KA("jtin"),
+                                    help="Demo: use a sample such as 987-65-4322.")
+            j_ten = c[3].selectbox("Form of ownership", aml.JOINT_TENANCY, index=_idx(aml.JOINT_TENANCY, j.get("tenancy", "")), key=KA("jten"))
+            c = st.columns([1, 3])
+            j_same = c[0].checkbox("Lives at the same address", j.get("address_same", True), key=KA("jsame"))
+            j_addr = "" if j_same else c[1].text_input("Joint owner's home address", j.get("address", ""), key=KA("jaddr"))
+            j_kind = "ITIN" if aml.digits(j_tin).startswith("9") and not aml.digits(j_tin).startswith(aml.TEST_SSN_PREFIX) else "SSN"
+            joint = {"name": j_name.strip(), "dob": j_dob.isoformat() if j_dob else "", "tin_masked": aml.mask_tin(j_tin),
+                     "tin_valid": aml.validate_tin(j_tin, j_kind)[0], "tenancy": j_ten, "address_same": j_same, "address": j_addr}
+        elif acct in aml.ENTITY_TYPES:
+            is_trust = acct == "trust"
+            e = i.entity
+            ui.group("The trust · you act as trustee" if is_trust else "The entity · you act as its authorized person")
+            c = st.columns([1.8, 1, 1, 1.2])
+            e_name = c[0].text_input("Name of the trust" if is_trust else "Legal name of the entity", e.get("legal_name", ""), key=KA("ename"))
+            kinds = ["Revocable trust", "Irrevocable trust"] if is_trust else aml.ENTITY_KINDS
+            e_kind = c[1].selectbox("Type", kinds, index=_idx(kinds, e.get("kind", "")), key=KA("ekind"))
+            e_ein = c[2].text_input("Taxpayer ID (EIN)", f"00000{e['ein_masked'][-4:]}" if e.get("ein_masked") else "", key=KA("eein"), placeholder="9 digits",
+                                    help="Demo: any 9 digits. A revocable trust may use the grantor's SSN.")
+            e_formed = c[3].text_input("Governing state" if is_trust else "State or country of formation", e.get("formed_in", ""), key=KA("eformed"))
+            docs = (["", "Certification of trust", "Trust agreement (title, trustee and signature pages)"] if is_trust else
+                    ["", "Articles / certificate of formation and resolution", "Partnership agreement", "Business license"])
+            c = st.columns([1.6, 1.6, 1.2])
+            e_docs = c[0].selectbox("Document provided", docs, index=_idx(docs, e.get("documents", "")), key=KA("edocs"),
+                                    format_func=lambda s: s or "None yet")
+            e_biz = c[1].text_input("Purpose of the trust" if is_trust else "Nature of the business", e.get("business", ""), key=KA("ebiz"))
+            e_exempt = aml.BO_EXEMPT[0]
+            if not is_trust:
+                e_exempt = c[2].selectbox("Excluded from beneficial-owner rule?", aml.BO_EXEMPT, index=_idx(aml.BO_EXEMPT, e.get("exempt", "")),
+                                          key=KA("eexempt"), help="Listed companies, regulated financial institutions and a few others "
+                                                                 "are excluded (31 CFR 1010.230(e)(2)).")
+            entity = {"legal_name": e_name.strip(), "kind": e_kind, "ein_masked": aml.mask_doc(e_ein),
+                      "ein_valid": len(aml.digits(e_ein)) == 9, "formed_in": e_formed.strip(), "documents": e_docs,
+                      "business": e_biz, "exempt": e_exempt, "certified": False}
+            if not is_trust and e_exempt == aml.BO_EXEMPT[0]:
+                ui.group("Beneficial owners · everyone who owns 25% or more, plus one person who controls the entity")
+                bo_df = pd.DataFrame(i.beneficial_owners or [{"name": "", "role": "Control person", "pct": None, "dob": "", "address": "", "id_last4": ""}],
+                                     columns=["name", "role", "pct", "dob", "address", "id_last4"])
+                bo_ed = st.data_editor(bo_df, num_rows="dynamic", width="stretch", key=KA("bos"), column_config={
+                    "name": st.column_config.TextColumn("Full legal name", required=True),
+                    "role": st.column_config.SelectboxColumn("Role", options=["Owner (25% or more)", "Control person", "Owner and control person"], required=True),
+                    "pct": st.column_config.NumberColumn("Ownership %", min_value=0, max_value=100, step=1),
+                    "dob": st.column_config.TextColumn("Date of birth (YYYY-MM-DD)", validate=r"^\d{4}-\d{2}-\d{2}$"),
+                    "address": st.column_config.TextColumn("Home address"),
+                    "id_last4": st.column_config.TextColumn("SSN / passport, last 4", validate=r"^[A-Za-z0-9]{4}$")})
+                bos = [{kk: ("" if (isinstance(v, float) and np.isnan(v)) or v is None else v) for kk, v in r.items()}
+                       for r in bo_ed.to_dict("records") if str(r.get("name") or "").strip() not in ("", "nan")]
+                entity["certified"] = st.checkbox("I certify, to the best of my knowledge, that the beneficial-ownership information "
+                                                  "above is complete and correct.", e.get("certified", False), key=KA("ecert"))
+            else:
+                bos = []
+
+        ui.group("Where the money comes from")
+        c = st.columns([1.05, 1.75, 0.9, 0.9])
+        sow = c[0].selectbox("Source of wealth", aml.SOURCE_OF_WEALTH, index=_idx(aml.SOURCE_OF_WEALTH, i.source_of_wealth), key=KA("sow"),
+                             help="How you built your assets over time.")
+        fund_opts = list(aml.FUNDING)
+        sof = c[1].selectbox("How will you fund the account?", fund_opts, index=_idx(fund_opts, i.source_of_funds), key=KA("sof"),
+                             help="Where this deposit comes from. We do not accept cash; third-party payments need review.")
+        funding = c[2].number_input("Initial deposit ($)", 0, 1_000_000_000, int(i.expected_initial_funding), 5_000, key=KA("fund"))
+        annual_dep = c[3].number_input("Further deposits ($/yr)", 0, 1_000_000_000, int(i.expected_annual_deposits), 1_000, key=KA("annual"))
+        c = st.columns([1.55, 1.6, 1.4], vertical_alignment="bottom")
+        wd = c[0].selectbox("How often will you withdraw?", aml.WITHDRAWALS, index=_idx(aml.WITHDRAWALS, i.expected_withdrawals), key=KA("wd"))
+        wires = c[1].checkbox("I expect to send or receive international wires", i.foreign_wires_expected, key=KA("wires"))
+        wire_ctry = c[2].multiselect("Countries involved", [x_ for x_ in aml.COUNTRIES if x_ != aml.US], default=list(i.wire_countries),
+                                     key=KA("wirectry")) if wires else []
+
+    with sa[2], st.container(key="card_kyc_regulatory"):
+        st.caption("Why we ask: tax law requires a certified taxpayer status; securities rules require us to ask about industry "
+                   "and public-company affiliations, political exposure and a trusted contact.")
+        ui.group("Tax status", first=True)
+        c = st.columns([1, 1, 1.4], vertical_alignment="bottom")
+        tax_res = c[0].selectbox("Tax residency", aml.TAX_RESIDENCY, index=_idx(aml.TAX_RESIDENCY, i.tax_residency), key=KA("res"))
+        other_tax = ""
+        if tax_res != "US only":
+            foreign = [x_ for x_ in aml.COUNTRIES if x_ != aml.US]
+            other_tax = c[1].selectbox("Other country of tax residence", foreign, index=_idx(foreign, i.other_tax_country), key=KA("taxctry"))
+        backup = c[2].checkbox("The IRS has notified me that I am subject to backup withholding", i.backup_withholding, key=KA("backup"))
+        if citizenship == "Non-resident alien":
+            cert_text = ("Form W-8BEN: under penalties of perjury, I certify that I am the beneficial owner of the income, that I am "
+                         "not a U.S. person, and that the information I have given is true and complete.")
+        else:
+            cert_text = ("Form W-9: under penalties of perjury, I certify that the number shown is my correct taxpayer identification "
+                         "number, that I am a U.S. citizen or other U.S. person, and that I am "
+                         + ("subject" if backup else "not subject") + " to backup withholding.")
+        tax_cert = st.checkbox(cert_text, i.tax_cert_signed, key=KA("taxcert"))
+
+        ui.group("Affiliations")
+        bd = st.checkbox("I, my spouse or a dependent child work for a broker-dealer, a securities exchange or FINRA.",
+                         i.employed_by_broker_dealer, key=KA("bd"))
+        bd_firm = st.text_input("Name of the firm", i.bd_firm, key=KA("bdfirm")) if bd else ""
+        ctrl = st.checkbox("I am a director, officer or 10% (or more) shareholder of a publicly traded company.",
+                           i.control_person_public_co, key=KA("ctrl"))
         ins_tk, plan105, hedge_ok = i.insider_ticker, i.has_10b5_1_plan, i.issuer_permits_hedging
         if ctrl:
             c = st.columns(3)
-            ins_tk = c[0].text_input("Issuer ticker", i.insider_ticker, key=K("instk"))
-            plan105 = c[1].checkbox("Rule 10b5-1 plan in place", i.has_10b5_1_plan, key=K("105"))
-            hedge_ok = c[2].checkbox("Issuer policy permits hedging", i.issuer_permits_hedging, key=K("hedgeok"))
+            ins_tk = c[0].text_input("Company ticker", i.insider_ticker, key=KA("instk"))
+            plan105 = c[1].checkbox("A Rule 10b5-1 trading plan is in place", i.has_10b5_1_plan, key=KA("105"))
+            hedge_ok = c[2].checkbox("The company's policy permits hedging", i.issuer_permits_hedging, key=KA("hedgeok"))
+        c = st.columns([1.6, 2])
+        default_pep = i.pep_type if i.pep_type != aml.PEP_TYPES[0] else (aml.PEP_TYPES[1] if i.politically_exposed else aml.PEP_TYPES[0])
+        pep_type = c[0].selectbox("Are you, a family member or a close associate a senior political or government official?",
+                                  aml.PEP_TYPES, index=_idx(aml.PEP_TYPES, default_pep), key=KA("pep"))
+        pep = pep_type != aml.PEP_TYPES[0]
+        pep_detail = c[1].text_input("Office held, country and your relationship", i.pep_detail, key=KA("pepd")) if pep else ""
 
-    with steps[1], st.container(key="card_kyc_household"):
+        ui.group("Trusted contact")
+        st.caption("Someone 18 or older we may contact if we suspect financial exploitation, cannot reach you, or need to confirm "
+                   "your health status or who holds a power of attorney. They cannot trade or see your balances (FINRA Rule 4512).")
+        c = st.columns([1.5, 1.2, 1.3])
+        trusted = c[0].text_input("Name and relationship", i.trusted_contact, key=KA("tc"))
+        tc_info = c[1].text_input("Their phone or email", i.trusted_contact_info, key=KA("tcinfo"))
+        poa = c[2].text_input("Power of attorney on file, if any", i.power_of_attorney, key=KA("poa"))
+        tc_declined = st.checkbox("I decline to name a trusted contact", i.trusted_contact_declined, key=KA("tcd"))
+
+    with sa[3], st.container(key="card_kyc_sign"):
+        st.caption("Read each document, tick to acknowledge it, then sign. Nothing is opened until all five are ticked and "
+                   "the signature matches the legal name on step 01.")
+        ui.notes([CIP_NOTICE], kind="Notice", tone="info")
+        ack_cip = st.checkbox("I have read the customer identification notice above.", i.cip_notice_ack, key=KA("ack_cip"))
+        crs = st.checkbox("I received **Form CRS** (relationship summary) and **Form ADV Part 2A** (firm brochure): services, fees "
+                          "and conflicts of interest.", i.form_crs_acknowledged, key=KA("crs"))
+        ack_priv = st.checkbox("I received the **privacy notice** describing how my information is collected, shared and protected "
+                               "(Regulation S-P).", i.privacy_notice_ack, key=KA("ack_priv"))
+        ack_esign = st.checkbox("I **consent to electronic delivery** of statements, confirmations, tax forms and disclosures. I can "
+                                "ask for paper copies or withdraw this consent at any time (E-SIGN Act).", i.esign_consent, key=KA("ack_esign"))
+        ack_agree = st.checkbox("I agree to the **Advisory Agreement** and the **Account Agreement**, which contains a **pre-dispute "
+                                "arbitration clause**: disputes go to FINRA arbitration, not to court.", i.agreement_signed, key=KA("ack_agree"))
+        st.caption("Also delivered at account opening: SIPC information (FINRA Rule 2266), BrokerCheck (Rule 2267), business "
+                   "continuity plan (Rule 4370), order-routing disclosure (Regulation NMS Rule 607), fee schedule"
+                   + (", IRA disclosure statement with the 7-day right to revoke" if acct == "IRA only" else "") + ".")
+        c = st.columns([2, 1, 1.4], vertical_alignment="bottom")
+        signature = c[0].text_input("Type your full legal name to sign", i.signature_name, key=KA("sig"), placeholder=full_name or "Legal name")
+        pdate = c[1].date_input("Date signed", _date(i.profile_date) or today, max_value=today, format="MM/DD/YYYY", key=KA("pdate"),
+                                help="The account record must be re-confirmed at least every 36 months (SEA Rule 17a-3).")
+        if signature and not aml.same_name(signature, full_name):
+            c[2].caption(":red[The signature does not match the legal name on step 01.]")
+        elif signature:
+            c[2].caption(":green[Signed electronically.]")
+
+    # ------------------------------------------------------------------ B. firm review
+    party_list = tuple(aml.parties(Identity(full_name=full_name, date_of_birth=dob.isoformat() if dob else "",
+                                           account_type=acct, joint_owner=joint, entity=entity, beneficial_owners=bos)))
+    hits = screen_parties(party_list, sdn.asof, sdn)
+    ui.part("B", "Firm review", "Filled in by the firm, never by the applicant: the verification vendor's result, list "
+            "screening, due-diligence approvals and a principal's acceptance.")
+    n_hits = len(hits)
+    with st.expander(f"Compliance desk · {'no' if not n_hits else n_hits} potential sanctions match{'es' if n_hits != 1 else ''}"
+                     f" · {sdn.count:,} listed parties screened", expanded=bool(n_hits) or i.politically_exposed):
+        st.caption("In production these fields are written by systems and analysts, not typed here. They are editable so you can "
+                   "see how each result moves the account between approved, pending and declined.")
+        ui.group("Identity verification (CIP)", first=True)
+        c = st.columns([1.2, 2, 1], vertical_alignment="bottom")
+        idv = c[0].selectbox("Vendor result", aml.ID_VERIFY, index=_idx(aml.ID_VERIFY, i.id_verification), key=KA("idv"),
+                             help="Documentary: unexpired government photo ID. Non-documentary: credit-bureau or public-database match.")
+        flags = c[1].multiselect("Identity-theft red flags raised (Regulation S-ID)", aml.ID_THEFT_FLAGS, default=list(i.id_theft_flags), key=KA("flags"))
+        flags_ok = c[2].checkbox("Red flags resolved", i.id_theft_resolved, key=KA("flagsok"), disabled=not flags)
+        ui.group("Sanctions and list screening")
+        if n_hits:
+            ui.notes([hh["summary"] for hh in hits], kind="Potential match", tone="bad")
+        else:
+            st.caption(f":green[No potential match] for {len(party_list)} name(s) screened. List: {sdn.source}, {sdn.asof}."
+                       + (" Try the name *Darius Embargo* to see the potential-match workflow." if blank else ""))
+        c = st.columns([1.3, 1.3, 1.4], vertical_alignment="bottom")
+        disp = c[0].selectbox("Analyst disposition of the match", aml.OFAC_DISPOSITIONS, index=_idx(aml.OFAC_DISPOSITIONS, i.ofac_disposition),
+                              key=KA("ofacdisp"), disabled=not n_hits,
+                              help="Compare date of birth, nationality and address. A similar name alone is not a match.")
+        media = c[1].selectbox("Adverse-media search", aml.ADVERSE_MEDIA, index=_idx(aml.ADVERSE_MEDIA, i.adverse_media), key=KA("media"))
+        m314 = c[2].checkbox("Positive match to a FinCEN 314(a) request", i.fincen_314a_match, key=KA("m314"))
+        ui.group("Due diligence and approvals")
+        c = st.columns(3)
+        sow_doc = c[0].checkbox("Source of wealth / funds documents received", i.sow_documented, key=KA("sowdoc"))
+        edd = c[1].checkbox("Enhanced due diligence approved", i.edd_cleared, key=KA("edd"))
+        if acct in aml.ENTITY_TYPES:
+            bo_ok = c[2].checkbox("Trustees verified" if acct == "trust" else "Beneficial owners verified", i.beneficial_owners_verified, key=KA("bo"))
+        c = st.columns(3)
+        edd_by = c[0].text_input("EDD approved by", i.edd_approver, key=KA("eddby"), disabled=not edd)
+        analyst = c[1].text_input("Analyst", i.analyst or "K. Osei (AML analyst)", key=KA("analyst"))
+        principal_name = c[2].text_input("Principal", i.principal_name or "D. Ramirez (Series 24)", key=KA("principal"))
+        principal_ok = st.checkbox("A principal has reviewed the file and accepts the account (FINRA Rule 4512)", i.principal_approved, key=KA("accept"))
+    status_slot = st.container()
+
+    # ------------------------------------------------------------------ C. investment profile
+    ui.part("C", "Investment profile", "What the recommendation is built from: household, balance sheet, retirement, goals, "
+            "experience and attitude to risk. Change anything and every section below updates.")
+    steps = st.tabs(["05  Household", "06  Balance sheet", "07  Retirement & tax", "08  Goals",
+                     "09  Experience & approvals", "10  Risk questionnaire"])
+
+    with steps[0], st.container(key="card_kyc_household"):
         st.caption("Why we ask: age, health and a spouse's details set the planning horizon, life tables, survivor "
                    "benefits and the age required withdrawals begin. Insurance in force changes what the portfolio must cover.")
         c = st.columns(5)
-        age = c[0].number_input("Age", 18, 100, h.age, key=K("age"))
+        dob_age = aml.age_on(dob.isoformat()) if dob else None
+        if dob_age is not None:
+            st.session_state[K("age")] = int(min(max(dob_age, 18), 100))
+        age_help = "Taken from the date of birth on step 01 once it is entered."
+        age = (c[0].number_input("Age", 18, 100, key=K("age"), disabled=True, help=age_help) if dob_age is not None
+               else c[0].number_input("Age", 18, 100, h.age, key=K("age"), help=age_help))
         sex = c[1].selectbox("Sex (life tables)", ["female", "male"], index=_idx(["female", "male"], h.sex), key=K("sex"))
         health = c[2].selectbox("Health", HEALTH, index=_idx(HEALTH, h.health), key=K("health"))
         marital = c[3].selectbox("Marital status", MARITAL, index=_idx(MARITAL, h.marital_status), key=K("mar"))
@@ -211,7 +528,7 @@ def kyc_form(k: str) -> ClientProfile:
         life_ins = c[0].checkbox("Life insurance in force", h.life_insured, key=K("life"))
         ltc_ins = c[1].checkbox("Long-term-care insurance", h.long_term_care_insured, key=K("ltci"))
 
-    with steps[2], st.container(key="card_kyc_money"):
+    with steps[1], st.container(key="card_kyc_money"):
         st.caption("Why we ask: income, savings and assets by tax treatment drive the household balance sheet, the "
                    "contribution plan, asset location and how much risk the household can carry.")
         c = st.columns(4)
@@ -246,7 +563,7 @@ def kyc_form(k: str) -> ClientProfile:
         fee = c[2].number_input("Advisory fee (%/yr)", 0.0, 2.0, f.advisory_fee * 100, 0.05, key=K("fee"),
                                 help="Charged on managed assets and deducted from projected returns (Form CRS).") / 100
 
-    with steps[3], st.container(key="card_kyc_retire"):
+    with steps[2], st.container(key="card_kyc_retire"):
         st.caption("Why we ask: retirement timing, spending and guaranteed income set the size of the biggest goal. "
                    "Without an SSA statement, benefits are estimated with the 2026 PIA formula. Projected taxes use the 2026 "
                    "federal brackets for your filing status plus a flat state rate.")
@@ -271,10 +588,10 @@ def kyc_form(k: str) -> ClientProfile:
         cg_rate = c[1].number_input("Capital gains rate (%)", 0, 40, int(f.cap_gains_rate * 100), key=K("cg")) / 100
         state_rate = c[2].number_input("State income tax (%)", 0.0, 15.0, f.state_tax_rate * 100, 0.5, key=K("st")) / 100
 
-    with steps[4], st.container(key="card_kyc_goals"):
+    with steps[3], st.container(key="card_kyc_goals"):
         st.caption("Each goal becomes its own bucket. **Needs** are funded first and with a safety margin; **wishes**, "
                    "such as a legacy, are not counted when measuring how much return the plan requires. Retirement comes "
-                   "from step 04. Goals dated beyond the planning horizon are moved to its last year and flagged.")
+                   "from step 07. Goals dated beyond the planning horizon are moved to its last year and flagged.")
         g_df = pd.DataFrame([dataclasses.asdict(g) for g in b.goals if g.kind != "retirement"],
                             columns=["name", "kind", "amount", "years_until", "duration_years", "priority"])
         g_df = g_df[["name", "kind", "amount", "years_until", "duration_years", "priority"]]
@@ -286,7 +603,7 @@ def kyc_form(k: str) -> ClientProfile:
             "duration_years": st.column_config.NumberColumn("Spread over (yrs)", min_value=1, max_value=30),
             "priority": st.column_config.SelectboxColumn("Priority", options=["need", "want", "wish"], required=True)})
 
-    with steps[5], st.container(key="card_kyc_exp"):
+    with steps[4], st.container(key="card_kyc_exp"):
         st.caption("Why we ask: options require written approval under FINRA Rule 2360 (experience by product, objectives, "
                    "financial information) and futures a risk disclosure under NFA Rule 2-30 / CFTC Rule 1.55. A more "
                    "conservative choice than the engine's is honoured automatically; a more aggressive one needs an advisor.")
@@ -312,7 +629,7 @@ def kyc_form(k: str) -> ClientProfile:
                          help="Negative = more conservative (applied). Positive = more aggressive (flagged for an advisor).")
         ov_reason = c[1].text_input("Reason for the adjustment", x.override_reason, key=K("ovr"))
 
-    with steps[6], st.container(key="card_kyc_risk"):
+    with steps[5], st.container(key="card_kyc_risk"):
         st.caption("Ten questions in the Grable-Lytton / FinaMetrica tradition, then an income gamble from the Health "
                    "and Retirement Study that estimates risk aversion directly. There are no right answers. Contradictory "
                    "answers are scored conservatively and flagged for review (SEC robo-adviser guidance 2017-02).")
@@ -343,16 +660,34 @@ def kyc_form(k: str) -> ClientProfile:
         if name and name.lower() != "nan":
             goals.append(Goal(name, r.get("kind") or "other", _num(r.get("amount"), 0.0), int(_num(r.get("years_until"), 0)),
                               int(_num(r.get("duration_years"), 1)), r.get("priority") or "want"))
-    return ClientProfile(
+    id_method = {aml.ID_VERIFY[0]: "documentary", aml.ID_VERIFY[1]: "non-documentary", aml.ID_VERIFY[2]: "pending"}.get(idv, "documentary")
+    profile = ClientProfile(
         label=b.label,
-        identity=Identity(full_name=full_name, citizenship=citizenship, tax_residency=tax_res, state=state, account_type=acct,
-                          beneficial_owners_verified=bo, employment_status=employment, occupation=occupation, employer=employer,
-                          source_of_wealth=sow, expected_initial_funding=float(funding), employed_by_broker_dealer=bd,
-                          control_person_public_co=ctrl, insider_ticker=ins_tk.upper(), has_10b5_1_plan=plan105,
-                          issuer_permits_hedging=hedge_ok, politically_exposed=pep, pep_detail=pep_detail, edd_cleared=edd,
-                          identity_verified=idv, id_method=id_method, ofac_clear=ofac, trusted_contact=trusted,
-                          trusted_contact_declined=tc_declined, power_of_attorney=poa, profile_date=pdate.isoformat(),
-                          form_crs_acknowledged=crs),
+        identity=Identity(
+            full_name=full_name, citizenship=citizenship, tax_residency=tax_res, state=state, account_type=acct,
+            beneficial_owners_verified=bo_ok, employment_status=employment, occupation=occupation, employer=employer,
+            source_of_wealth=sow, expected_initial_funding=float(funding), employed_by_broker_dealer=bd,
+            control_person_public_co=ctrl, insider_ticker=ins_tk.upper().strip(), has_10b5_1_plan=plan105,
+            issuer_permits_hedging=hedge_ok, politically_exposed=pep, pep_detail=pep_detail, edd_cleared=edd,
+            identity_verified=idv != aml.ID_VERIFY[3], id_method=id_method, ofac_clear=disp != aml.OFAC_DISPOSITIONS[2],
+            trusted_contact=trusted, trusted_contact_declined=tc_declined, power_of_attorney=poa,
+            profile_date=pdate.isoformat(), form_crs_acknowledged=crs,
+            enforce_intake=True, date_of_birth=dob.isoformat() if dob else "", tin_type=tin_type, tin_masked=tin_masked,
+            tin_valid=tin_valid, address_line=street, address_city=city, address_zip=zip_, address_country=country,
+            mailing_address=mailing, phone=phone, email=email, country_of_citizenship=ctry_cit, other_tax_country=other_tax,
+            id_doc_type=id_type, id_doc_masked=aml.mask_doc(id_raw), id_doc_issuer=id_issuer,
+            id_doc_expiry=id_exp.isoformat() if id_exp else "", joint_owner=joint if acct == "joint" else {},
+            entity=entity if acct in aml.ENTITY_TYPES else {}, beneficial_owners=bos if acct in aml.ENTITY_TYPES else [],
+            ira_beneficiary=ira_ben if acct == "IRA only" else "", account_purpose=purpose, industry=industry,
+            source_of_funds=sof, expected_annual_deposits=float(annual_dep), expected_withdrawals=wd,
+            foreign_wires_expected=wires, wire_countries=list(wire_ctry), pep_type=pep_type, bd_firm=bd_firm,
+            trusted_contact_info=tc_info, tax_cert_signed=tax_cert, backup_withholding=backup, cip_notice_ack=ack_cip,
+            privacy_notice_ack=ack_priv, esign_consent=ack_esign, agreement_signed=ack_agree, signature_name=signature,
+            id_verification=idv, id_theft_flags=list(flags), id_theft_resolved=flags_ok and bool(flags), ofac_hits=hits,
+            ofac_disposition=disp if n_hits else aml.OFAC_DISPOSITIONS[0],
+            screening_source=f"{'OFAC SDN list' if sdn.live else 'offline sample list'}, {sdn.asof}", adverse_media=media,
+            fincen_314a_match=m314, sow_documented=sow_doc, edd_approver=edd_by if edd else "",
+            principal_approved=principal_ok, principal_name=principal_name, analyst=analyst),
         household=Household(age=int(age), sex=sex, health=health, marital_status=marital,
                             spouse_age=int(sp_age) if sp_age else None, spouse_sex=sp_sex, spouse_health=sp_health,
                             dependents=int(deps), long_term_care_insured=ltc_ins, life_insured=life_ins),
@@ -376,6 +711,14 @@ def kyc_form(k: str) -> ClientProfile:
                               exclude_derivatives=nod, override_tiers=int(ov), override_reason=ov_reason),
         risk_answers=answers, gamble_answers=gamble,
     )
+
+    status, reasons = profile.kyc_status()
+    miss = aml.missing_items(profile)
+    with status_slot:
+        items = reasons if status != "incomplete" else miss
+        ui.application_status(status, aml.STATUS_LABEL[status], aml.STATUS_TITLE[status], STATUS_SUMMARY[status],
+                              [(s_, len(v)) for s_, v in miss.items()], items)
+    return profile
 
 
 # ======================================================================== charts
@@ -432,8 +775,9 @@ def bar_h(labels, values, colors, rng=(0, 1.12), fmt=".0%", vline=None, vlabel="
 
 
 def stop_panel(el) -> None:
-    ui.notes(["The account cannot be opened, so no recommendation is implemented. Fix the items below in the profile "
-              "(step 01) or escalate to compliance."] + el.kyc_reasons, kind="Account blocked", tone="bad")
+    ui.notes(["The account cannot be opened, so no recommendation is implemented. The items below go to the AML "
+              "officer; they are corrected on the application or the firm-review panel in section 01."] + el.kyc_reasons,
+             kind="Account declined", tone="bad")
 
 
 # ======================================================================== page chrome: top bar and controls
@@ -468,10 +812,13 @@ ui.page_runtime()           # near the top: Streamlit lazy-loads component frame
 hero_slot = st.container()
 
 # ------------------------------------------------------------------------ 01 Profile
-ui.section("Client profile", "Seven short steps: the same information a bank collects when it opens an advisory account. "
-           "Cases A-C are pre-filled with documented assumptions. Change anything and every section below updates.",
+ui.section("Open the account", "The same sequence a broker-dealer follows: the client's application, the firm's own "
+           "review, then the investment profile. Cases A-C are approved clients with documented assumptions; the new "
+           "client starts from an empty application. Change anything and every section below updates.",
            eyebrow="Know your customer", anchor="profile", num="01")
-profile = kyc_form(choice)
+with st.spinner("Loading the OFAC sanctions list..."):
+    sdn = get_sdn(use_live)
+profile = kyc_form(choice, sdn)
 
 # live single-stock data for the concentrated position (implied vol prices the collar; shares/volume for Rule 144)
 stock = get_stock(profile.finances.concentrated_ticker) if (yahoo_ok and profile.finances.concentrated_ticker and
@@ -498,13 +845,14 @@ with hero_slot:
     chips = [("Age", str(h.age)), ("Household", hh), ("Invested", money(f.investable)), ("Bank cash", money(f.cash)),
              ("Retirement", "Retired" if retired else f"at {p.effective_retirement_age}"),
              ("Goals", str(len([g for g in p.goals if g.kind != "retirement"]) + 1)), ("Risk tier", f"{rp.tier} of 10"),
-             ("Account", el.kyc_status.upper())]
+             ("Account", aml.STATUS_LABEL[el.kyc_status])]
     if blocked:
-        sub = "**Account blocked.** Identity, sanctions or beneficial-ownership checks failed; nothing is implemented until compliance clears them."
+        sub = "**Account declined.** Identity, sanctions or beneficial-ownership checks failed; nothing is implemented until compliance clears them."
     else:
         sub = (f"**{verdict}.** The plan works in {sim.success:.0%} of {cfg.n_paths:,} simulated markets ({sim.success_full:.0%} "
                f"with no spending cut). Recommended: the *{rp.tier_name}* portfolio, {rec.glide[0]:.0%} in stocks for long-term money."
-               + (" **Trading on hold** pending compliance review." if el.kyc_status == "hold" else ""))
+               + (" **Trading on hold** pending compliance review." if el.kyc_status == "hold" else "")
+               + (" **Proposal only:** the account application is not complete yet." if el.kyc_status == "incomplete" else ""))
     ui.hero(f"Client plan  ·  {CLIENTS[choice]}  ·  {date.today():%B %d, %Y}", HEADLINES[choice], sub, chips, sim.success,
             f"of simulated markets fund the plan to age {PA}, after {rec.fee_total:.2%} a year in fees and taxes")
 
@@ -516,6 +864,10 @@ if blocked:
 else:
     if el.kyc_status == "hold":
         ui.notes(el.kyc_reasons, kind="On hold", tone="bad")
+    elif el.kyc_status == "incomplete":
+        ui.notes([f"This is a proposal, not an open account: {len(el.kyc_reasons)} item(s) are outstanding on the account "
+                  "application in section 01. Nothing is traded and no derivative is recommended until it is approved."],
+                 kind="Proposal only", tone="info")
     if advice_review:
         ui.notes(advice_review, kind="Advisor review required", tone="bad")
     left, right = st.columns([1.3, 1], gap="large")
@@ -1120,57 +1472,186 @@ else:
                    "here from the same public inputs.")
 
 # ------------------------------------------------------------------------ 08 Compliance
-ui.section("Suitability file", "What a reviewer would check before this recommendation goes to the client: account "
-           "opening (CIP, AML, customer due diligence), the Regulation Best Interest and fiduciary care obligations, "
-           "and account protections.", eyebrow="Compliance", anchor="compliance", num="08")
-status_tone = {"cleared": "good", "hold": "mid", "blocked": "bad"}[el.kyc_status]
+idn = p.identity
+rating = aml.risk_rating(p)
+log = build_log(p, el.kyc_status, rec.checklist)
+log_sum = log_summary(log)
+need_action = log_sum["OPEN"] + log_sum["REVIEW"] + log_sum["FAIL"]
+ui.section("Compliance file", "What a reviewer checks before this recommendation goes to the client: the account-opening "
+           "record (identification, due diligence, sanctions screening), the customer's AML risk rating, the Regulation "
+           "Best Interest and fiduciary care obligations, and the audit log that ties them together.",
+           eyebrow="Compliance", anchor="compliance", num="08")
+status_tone = {"cleared": "good", "hold": "mid", "incomplete": "info", "blocked": "bad"}[el.kyc_status]
+n_hits = len(idn.ofac_hits)
+if not idn.ofac_clear:
+    scr = ("Match", "confirmed: block and report", "bad")
+elif n_hits and idn.ofac_disposition == aml.OFAC_DISPOSITIONS[0]:
+    scr = (f"{n_hits} to review", "potential match, not yet dispositioned", "mid")
+elif n_hits:
+    scr = ("Cleared", f"{n_hits} false positive(s) dispositioned", "good")
+else:
+    scr = ("Clear", f"{len(aml.parties(idn))} name(s) · {'OFAC SDN list' if sdn.live else 'offline sample list'}", "good")
 ui.kpis([
-    {"label": "Account status", "value": el.kyc_status.upper(), "sub": "CIP · OFAC · CDD", "tone": status_tone},
-    {"label": "Options / futures", "value": f"L{el.options_level} / {'yes' if el.futures_ok else 'no'}", "sub": "approval on file", "tone": "info"},
-    {"label": "Checklist", "value": f"{sum(1 for c_ in rec.checklist if c_[1])} / {len(rec.checklist)}", "sub": "items passing",
+    {"label": "Account status", "value": aml.STATUS_LABEL[el.kyc_status], "sub": "CIP · CDD · OFAC · principal", "tone": status_tone},
+    {"label": "AML risk rating", "value": rating.level.capitalize(), "sub": f"{rating.score}/100 · review every {rating.review_months} months",
+     "tone": {"low": "good", "medium": "mid", "high": "bad"}[rating.level]},
+    {"label": "Sanctions screening", "value": scr[0], "sub": scr[1], "tone": scr[2]},
+    {"label": "Audit log", "value": f"{len(log)} lines", "sub": f"{need_action} need action" if need_action else "nothing needs action",
+     "tone": "bad" if log_sum["FAIL"] else "mid" if need_action else "good"},
+])
+ui.kpis([
+    {"label": "Suitability checklist", "value": f"{sum(1 for c_ in rec.checklist if c_[1])} / {len(rec.checklist)}", "sub": "items passing",
      "tone": "good" if all(c_[1] for c_ in rec.checklist) else "bad"},
+    {"label": "Options / futures", "value": f"L{el.options_level} / {'yes' if el.futures_ok else 'no'}", "sub": "approval on file", "tone": "info"},
     {"label": "Profile age", "value": f"{p.profile_age_months} mo", "sub": "refresh every 36 months", "tone": "good" if p.profile_age_months <= 36 else "bad"},
     {"label": "Advisor review items", "value": str(len(rp.review_flags)), "sub": "inconsistent answers / overrides", "tone": "bad" if rp.review_flags else "good"},
 ])
 if el.kyc_reasons:
-    ui.notes(el.kyc_reasons, kind="Account gate", tone="bad" if el.kyc_status != "cleared" else "mid")
+    ui.notes(el.kyc_reasons, kind={"hold": "Pending review", "incomplete": "Outstanding", "blocked": "Declined"}.get(el.kyc_status, "Account gate"),
+             tone={"hold": "mid", "incomplete": "info", "blocked": "bad"}.get(el.kyc_status, "mid"))
+
+ui.subsection("Know-your-customer record", "What was collected and verified at account opening. Identification numbers are "
+              "masked here; the full values stay with the custodian.")
+c1, c2 = st.columns([1.3, 1], gap="large")
+with c1, st.container(key="card_cip"):
+    ui.eyebrow("Customer identification and due diligence")
+    dob_age = aml.age_on(idn.date_of_birth)
+    addr = ", ".join(x_ for x_ in (idn.address_line, idn.address_city, f"{idn.state} {idn.address_zip}".strip() if idn.address_country == aml.US
+                                   else idn.address_zip, idn.address_country) if x_)
+    others = []
+    if idn.account_type == "joint" and idn.joint_owner.get("name"):
+        others.append(f"Joint owner {idn.joint_owner['name']} ({idn.joint_owner.get('tin_masked', '')}); {str(idn.joint_owner.get('tenancy', '')).lower()}")
+    if idn.account_type in aml.ENTITY_TYPES and idn.entity.get("legal_name"):
+        others.append(f"{idn.entity['legal_name']} ({idn.entity.get('kind', '')}, EIN {idn.entity.get('ein_masked', '')})")
+    others += [f"{b_['name']} ({b_.get('role', 'owner')})" for b_ in idn.beneficial_owners if b_.get("name")]
+    acks = [n_ for v_, n_ in ((idn.cip_notice_ack, "CIP notice"), (idn.form_crs_acknowledged, "Form CRS / ADV 2A"),
+                              (idn.privacy_notice_ack, "privacy notice"), (idn.esign_consent, "e-delivery"),
+                              (idn.agreement_signed, "agreements")) if v_]
+    ui.table(["Item", "On file", "Basis"], [
+        ["Legal name", idn.full_name or "not provided", "CIP: 31 CFR 1023.220(a)(2)(i)"],
+        ["Date of birth", f"{idn.date_of_birth} (age {dob_age})" if dob_age is not None else "not provided", "CIP"],
+        ["Home address", addr or "not provided", "CIP: street address, not a P.O. box"],
+        ["Identification number", f"{idn.tin_type} {idn.tin_masked}" + ("" if idn.tin_valid else " (not valid)") if idn.tin_masked else "not provided", "CIP; Form W-9"],
+        ["Photo ID", f"{idn.id_doc_type} {idn.id_doc_masked}, {idn.id_doc_issuer}, expires {idn.id_doc_expiry}" if idn.id_doc_masked else "not provided",
+         "Documentary verification"],
+        ["Identity verification", idn.id_verification + ("; red flags: " + "; ".join(idn.id_theft_flags) if idn.id_theft_flags else ""),
+         "31 CFR 1023.220(a)(2)(ii); Reg S-ID"],
+        ["Citizenship and tax", f"{idn.citizenship} ({idn.country_of_citizenship}); tax residency: {idn.tax_residency}"
+         + (f" + {idn.other_tax_country}" if idn.other_tax_country else "") + ("; backup withholding" if idn.backup_withholding else ""),
+         "Form W-8BEN" if idn.citizenship == "Non-resident alien" else "Form W-9"],
+        ["Account", f"{aml.ACCOUNT_LABEL.get(idn.account_type, idn.account_type)}; {idn.account_purpose.lower()}", "FINRA 4512; CDD purpose"],
+        ["Other parties", "; ".join(others) or "none", "CIP per owner; 31 CFR 1010.230"],
+        ["Employment", f"{idn.employment_status}; {idn.occupation or 'n/a'}" + (f" at {idn.employer}" if idn.employer else "")
+         + (f"; {idn.industry.lower()}" if idn.industry != aml.INDUSTRIES[0] else ""), "FINRA 4512(a)(2); SEA 17a-3(a)(17)"],
+        ["Source of wealth and funds", f"{idn.source_of_wealth}; funded by: {idn.source_of_funds}"
+         + ("; documents received" if idn.sow_documented else ""), "CDD: 31 CFR 1023.210(b)(5)"],
+        ["Expected activity", f"{money(idn.expected_initial_funding)} initial, {money(idn.expected_annual_deposits)}/yr after; withdrawals "
+         f"{idn.expected_withdrawals.lower()}" + ("; international wires: " + (", ".join(idn.wire_countries) or "countries not given")
+                                                  if idn.foreign_wires_expected else ""), "CDD baseline for monitoring"],
+        ["Political exposure / media / 314(a)", f"{idn.pep_type if idn.politically_exposed else 'none'}; {idn.adverse_media.lower()}; "
+         f"314(a) {'MATCH' if idn.fincen_314a_match else 'no match'}", "31 CFR 1010.620; 1010.520"],
+        ["Trusted contact", (f"{idn.trusted_contact}" + (f", {idn.trusted_contact_info}" if idn.trusted_contact_info else "")) if idn.trusted_contact
+         else ("declined" if idn.trusted_contact_declined else "not provided"), "FINRA 4512(a)(1)(F)"],
+        ["Disclosures and signature", (", ".join(acks) or "none acknowledged") + (f"; signed '{idn.signature_name}' {idn.profile_date}" if idn.signature_name else "; not signed"),
+         "Reg BI; Reg S-P; E-SIGN; FINRA 2268"],
+        ["Accepted by", f"{idn.principal_name} (principal)" if idn.principal_approved else "not yet accepted", "FINRA 4512(a)(1)(D)"],
+    ])
+with c2:
+    with st.container(key="card_rating"):
+        ui.eyebrow(f"Customer AML risk rating · {rating.level} · {rating.score} / 100")
+        ui.risk_rating(rating.score, rating.level)
+        ui.table(["Factor", "Points", "Why"], rating.table(), num_cols={1})
+        st.caption(f"House scoring model (no regulation prescribes one): under {aml.RISK_MEDIUM} low, {aml.RISK_MEDIUM}-{aml.RISK_HIGH - 1} "
+                   f"medium, {aml.RISK_HIGH}+ high. Periodic review every {rating.review_months} months, sooner on a trigger event. "
+                   + ("**Enhanced due diligence required:** " + "; ".join(rating.edd_reasons) + "." if rating.edd_required
+                      else "Enhanced due diligence is not required.")
+                   + f" FATF lists as of the {aml.FATF_ASOF}; sanctioned territories as of {aml.SANCTIONS_ASOF}.")
+    with st.container(key="card_monitor"):
+        ui.eyebrow("After opening · what surveillance watches for")
+        for n_ in aml.monitoring_notes(p):
+            st.markdown("- " + n_.replace("$", "\\$"))
+
+ui.subsection("Suitability checklist", "The Regulation Best Interest and fiduciary care items the recommendation file must evidence.")
 c1, c2 = st.columns([1.5, 1], gap="large")
 with c1:
     ui.checklist(rec.checklist)
-with c2:
-    with st.container(key="card_notes"):
-        ui.eyebrow("Account notes")
-        for n_ in el.notes:
-            st.markdown(f"- {n_}")
-    audit = {"generated": f"{CURRENT_YEAR} (model run)", "firm": "Keel & Co. (demo)", "profile": p.to_dict(),
-             "kyc_status": el.kyc_status, "kyc_reasons": el.kyc_reasons, "risk": rp.summary(),
-             "capacity_parts": rp.capacity_parts, "flags": rp.flags, "review_flags": rp.review_flags,
-             "allocation": rec.weights_now.round(4).to_dict(), "glide_path": [round(float(x), 3) for x in rec.glide],
-             "options_level": el.options_level, "options_reasons": el.options_reasons, "futures_ok": el.futures_ok,
-             "rop_approval": {"principal": "ROP-demo", "date": str(date.today()), "verification_letter_sent": str(date.today())},
-             "overlays": [o.describe() for o, _, _ in rec.overlays.overlays], "futures": rec.overlays.futures,
-             "concentrated_plan": rec.overlays.concentrated_plan, "fees": {"advisory": f.advisory_fee, "etf": rec.stats["expense_ratio"], "total": rec.fee_total},
-             "success_plan": rec.sim.success, "success_no_cut": rec.sim.success_full, "success_lifetime": rec.sim_life.success,
-             "sustainable_spending_85": rec.sustainable, "checklist": [{"item": a, "pass": b, "evidence": c_} for a, b, c_ in rec.checklist],
-             "levers": rec.levers.to_dict("records") if rec.levers is not None else None,
-             "scenarios": rec.scenarios.to_dict("records") if rec.scenarios is not None else None,
-             "limitations": dict(LIMITATIONS), "market": mkt_dict, "stock": stock_info,
-             "cma": "J.P. Morgan 2026 LTCMA; history 2010-2026", "sim_config": json.loads(cfg_json)}
-    st.download_button("Download audit record (JSON)", json.dumps(audit, indent=2, default=float),
-                       file_name=f"robo_audit_{choice}.json", mime="application/json", width="stretch")
-    st.download_button("Download client report (HTML, print to PDF)",
-                       build_report(rec, sim_label=f"{cfg.n_paths:,} paths, {cfg.spending_rule} spending, seed {cfg.seed}"),
-                       file_name=f"keel_client_report_{choice}.html", mime="text/html", type="primary", width="stretch")
+with c2, st.container(key="card_notes"):
+    ui.eyebrow("Account notes")
+    for n_ in el.notes:
+        st.markdown("- " + n_.replace("$", "\\$"))
+
+ui.subsection("Audit log", "One line per control, in the order an analyst works the file. **Click any line** to open its "
+              "instructions: what to do now for that result, what the line records, the rule it evidences, who acts and "
+              "how long the record is kept.")
+ui.result_legend(AUDIT_RESULTS)
+c = st.columns([1.4, 1.3, 2.3], vertical_alignment="center")
+log_view = c[0].radio("Show", ["All lines", "Needs action"], horizontal=True, key="log_view", label_visibility="collapsed")
+open_all = c[1].toggle("Open every instruction", value=False, key="log_open")
+shown = [ln for ln in log if ln["result"] in ("OPEN", "REVIEW", "FAIL")] if log_view == "Needs action" else log
+c[2].caption(f"{len(shown)} of {len(log)} lines · " + " · ".join(f"{v_} {k_}" for k_, v_ in log_sum.items() if v_))
+if shown:
+    ui.log_lines(shown, open_all=open_all)
+else:
+    ui.notes(["No line needs action: every control passed or is informational."], kind="All clear", tone="good")
+st.caption(f"Evaluated {log[0]['time']} UTC. Each line carries a hash that covers the line before it, so an altered or deleted entry "
+           f"breaks the chain (final hash `{log[-1]['hash']}`); production systems keep this trail in non-rewriteable storage "
+           "(SEA Rule 17a-4(f)). The codes group as APP application, CIP identification, CDD due diligence, SAN sanctions and "
+           "screening, TAX, DIS disclosures, ACC account protections, SUI suitability, MON monitoring, DEC decision, REC records.")
+
+hist = st.session_state.setdefault("decision_history", {}).setdefault(choice, [])
+if not hist or hist[-1][1] != el.kyc_status:
+    hist.append((log[0]["time"], el.kyc_status, need_action))
+if len(hist) > 1:
+    with st.expander(f"Decision history this session · {len(hist)} status changes"):
+        ui.table(["Time (UTC)", "Status", "Lines needing action"],
+                 [[t_, aml.STATUS_LABEL[s_], str(n_)] for t_, s_, n_ in hist], num_cols={2})
+
+audit = {"generated_utc": log[0]["time"], "firm": "Keel & Co. (demo)", "profile": p.to_dict(),
+         "kyc_status": el.kyc_status, "kyc_status_label": aml.STATUS_LABEL[el.kyc_status], "kyc_reasons": el.kyc_reasons,
+         "aml_risk_rating": {"score": rating.score, "level": rating.level, "review_months": rating.review_months,
+                             "edd_required": rating.edd_required, "edd_reasons": rating.edd_reasons,
+                             "factors": [{"factor": a_, "points": b_, "why": c_} for a_, b_, c_ in rating.factors]},
+         "sanctions_screening": {"list": sdn.source, "list_asof": sdn.asof, "listed_parties": sdn.count,
+                                 "names_screened": [n_ for _, n_, _, _ in aml.parties(idn)], "hits": idn.ofac_hits,
+                                 "disposition": idn.ofac_disposition},
+         "audit_log": log, "risk": rp.summary(),
+         "capacity_parts": rp.capacity_parts, "flags": rp.flags, "review_flags": rp.review_flags,
+         "allocation": rec.weights_now.round(4).to_dict(), "glide_path": [round(float(x), 3) for x in rec.glide],
+         "options_level": el.options_level, "options_reasons": el.options_reasons, "futures_ok": el.futures_ok,
+         "rop_approval": {"principal": "ROP-demo", "date": str(date.today()), "verification_letter_sent": str(date.today())},
+         "overlays": [o.describe() for o, _, _ in rec.overlays.overlays], "futures": rec.overlays.futures,
+         "concentrated_plan": rec.overlays.concentrated_plan, "fees": {"advisory": f.advisory_fee, "etf": rec.stats["expense_ratio"], "total": rec.fee_total},
+         "success_plan": rec.sim.success, "success_no_cut": rec.sim.success_full, "success_lifetime": rec.sim_life.success,
+         "sustainable_spending_85": rec.sustainable, "checklist": [{"item": a, "pass": b, "evidence": c_} for a, b, c_ in rec.checklist],
+         "levers": rec.levers.to_dict("records") if rec.levers is not None else None,
+         "scenarios": rec.scenarios.to_dict("records") if rec.scenarios is not None else None,
+         "limitations": dict(LIMITATIONS), "market": mkt_dict, "stock": stock_info,
+         "cma": "J.P. Morgan 2026 LTCMA; history 2010-2026", "sim_config": json.loads(cfg_json)}
+c1, c2, c3 = st.columns(3)
+c1.download_button("Download audit record (JSON)", json.dumps(audit, indent=2, default=float),
+                   file_name=f"robo_audit_{choice}.json", mime="application/json", width="stretch")
+c2.download_button("Download audit log with instructions (CSV)", log_csv(log),
+                   file_name=f"keel_audit_log_{choice}.csv", mime="text/csv", width="stretch")
+c3.download_button("Download client report (HTML, print to PDF)",
+                   build_report(rec, sim_label=f"{cfg.n_paths:,} paths, {cfg.spending_rule} spending, seed {cfg.seed}"),
+                   file_name=f"keel_client_report_{choice}.html", mime="text/html", type="primary", width="stretch")
 with st.container(key="card_disclosures"):
     ui.eyebrow("Disclosures")
     st.markdown(
-        "Projections are hypothetical, do not reflect actual results and are not guarantees. Returns use J.P. Morgan "
+        "**IMPORTANT: The projections or other information generated by this tool regarding the likelihood of various "
+        "investment outcomes are hypothetical in nature, do not reflect actual investment results and are not guarantees "
+        "of future results.** Results vary with each use and over time. Returns use J.P. Morgan "
         "Asset Management's 2026 Long-Term Capital Market Assumptions (10-15 years, passive, before fees) less the stated "
-        "fees; actual returns, inflation and taxes will differ. The risk questionnaire is not the sole basis of the "
+        "fees; actual returns, inflation and taxes will differ. The universe is 15 broad index ETFs; no individual "
+        "securities are selected. Recommendations are produced by an algorithm from the answers you give: it rebalances "
+        "by rule regardless of market conditions, and an advisor reviews flagged cases rather than every account. The "
+        "risk questionnaire is not the sole basis of the "
         "recommendation: financial capacity, goals and stated loss limits are weighed with it, and inconsistent answers "
         "are referred to an advisor. Options involve risk and are not suitable for all investors; read *Characteristics "
         "and Risks of Standardized Options*. Futures trading involves substantial risk of loss. Buffered ETFs protect "
         "only if held for the full outcome period. Fair values in the Markets section are model estimates from public data. "
+        "Identity verification, adverse-media and 314(a) results on this page are entered by hand to show the workflow; "
+        "sanctions screening uses the public OFAC list and is not a substitute for a licensed screening service. "
         "This tool is an educational project.")
 
 # ------------------------------------------------------------------------ 09 Compare
@@ -1206,14 +1687,15 @@ ui.section("How the robo decides", "The same sequence a bank advisor follows, ma
            "derivation and literature review are in the accompanying research paper.", eyebrow="Methodology",
            anchor="method", num="10")
 ui.steps([
-    ("Open the account", "CIP identity check, OFAC screening, customer due diligence; a failure blocks, a pending review holds."),
+    ("Open the account", "Application (CIP data, tax certification, disclosures, signature), identity verification, OFAC "
+                         "name screening, AML risk rating; missing items wait, a failure declines, a review holds."),
     ("Know the client", "The FINRA 2111 / Reg BI investment profile, product-level experience, trusted contact, insider status."),
     ("Measure risk three ways", "Willingness (gamma, loss limit, consistency checks), ability (balance sheet, stress test, capacity) and need."),
     ("Bucket the goals", "Each goal gets its own horizon-matched mix; retirement gets a household glide path."),
     ("Build the models", "Resampled mean-variance on J.P. Morgan 2026 assumptions under investment-policy limits."),
     ("Gate the derivatives", "Options level 0-4, futures eligibility and issuer rules decide which overlays are allowed."),
     ("Stress the plan", "Monte Carlo with fat tails, fees, 2026 tax brackets, RMDs, Social Security, longevity, historical replays."),
-    ("Document and review", "Reg BI checklist, audit record, client report, 36-month refresh and advisor-review flags."),
+    ("Document and review", "Reg BI checklist, audit log with instructions per line, client report, risk-based refresh, advisor-review flags."),
 ])
 ui.subsection("From inputs to recommendations", "Every item the intake collects is used somewhere. This is the map.")
 with st.container(key="card_map"):
@@ -1230,7 +1712,10 @@ with st.container(key="card_map"):
         ["Objective, knowledge, experience by product, disclosures, margin", "Options approval level; futures eligibility; overlay choice (income vs protection)"],
         ["Risk questionnaire and income gamble", "Gamma (willingness); max-loss cap via 2008/2022 stress test; consistency checks and advisor-review flags"],
         ["Client override", "More conservative: applied and logged; more aggressive: flagged for advisor sign-off"],
-        ["Account type, citizenship, tax residency, source of wealth, PEP", "Account gate (block/hold); IRA-only limits on margin and futures; non-US tax notes; EDD"],
+        ["Name, date of birth, address, ID number, photo ID", "Customer Identification Program record; sanctions name screening; age for every projection; account gate"],
+        ["Account type, citizenship, tax residency, source of wealth, PEP", "Account gate (decline/hold); IRA-only limits on margin and futures; non-US tax notes; EDD"],
+        ["Funding method, expected deposits and withdrawals, industry, countries", "Customer AML risk rating and review cycle; source-of-funds review; monitoring baseline and reporting triggers"],
+        ["Disclosures, tax certification, signature, firm review", "Application completeness (proposal vs open account); audit log; principal acceptance"],
         ["Advisory fee, tax rates, state", "Fee drag on every simulated return; federal brackets + state rate on withdrawals, RMDs and conversions"],
     ])
 ui.subsection("Reasonably available alternatives", "Reg BI asks whether a simpler product would serve the client as well. "

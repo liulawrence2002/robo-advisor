@@ -5,10 +5,14 @@ broker-dealer to make reasonable efforts to obtain (age, other investments, fina
 situation and needs, tax status, investment objectives, experience, time horizon,
 liquidity needs, risk tolerance), plus the account-opening items banks collect under
 the Customer Identification Program (31 CFR 1023.220), FinCEN's customer due diligence
-rule (beneficial ownership, source of wealth, PEP screening), FATCA/CRS tax residency,
+rule (beneficial ownership, source of wealth, PEP screening), FATCA tax residency,
 FINRA Rule 4512 (trusted contact), Rule 3210 (accounts at other broker-dealers), Rule
 2165 (seniors), Rule 144 / 10b5-1 (insiders), and options/futures account approval
 (FINRA Rule 2360, NFA Rule 2-30).
+
+The account-opening controls themselves (application completeness, customer risk rating,
+the gate) live in robo/aml.py; sanctions name screening in robo/sanctions.py; the audit
+log and its practitioner guide in robo/audit.py.
 """
 from __future__ import annotations
 
@@ -27,7 +31,7 @@ PROFILE_MAX_AGE_MONTHS = 36      # SEC 17a-3(a)(17): account record refreshed at
 class Identity:
     full_name: str = "Client"
     citizenship: Literal["US citizen", "US resident alien", "Non-resident alien"] = "US citizen"
-    tax_residency: Literal["US only", "US and another country", "Outside the US"] = "US only"   # FATCA / CRS
+    tax_residency: Literal["US only", "US and another country", "Outside the US"] = "US only"   # FATCA
     state: str = "NY"
     account_type: Literal["individual", "joint", "IRA only", "trust", "LLC / corporation"] = "individual"
     beneficial_owners_verified: bool = True      # FinCEN CDD rule: owners >= 25% and a control person (entities)
@@ -54,6 +58,65 @@ class Identity:
     power_of_attorney: str = ""                  # POA / guardian on file (seniors, diminished capacity)
     profile_date: str = ""                       # ISO date the profile was last confirmed ("" = today)
     form_crs_acknowledged: bool = True           # Form CRS / ADV Part 2 delivered and acknowledged
+
+    # ---- account application (collected by the intake form). Full ID numbers are never stored:
+    # only a masked value and whether the number passed validation.
+    enforce_intake: bool = False                 # set by the intake form: every required item must be present to clear
+    date_of_birth: str = ""                      # ISO date (CIP data element)
+    tin_type: str = "SSN"                        # SSN / ITIN / foreign passport or government ID / applied for
+    tin_masked: str = ""                         # "XXX-XX-4321"
+    tin_valid: bool = False
+    address_line: str = ""                       # residential street address (CIP: not a P.O. box)
+    address_city: str = ""
+    address_zip: str = ""
+    address_country: str = "United States"
+    mailing_address: str = ""                    # only if different
+    phone: str = ""
+    email: str = ""
+    country_of_citizenship: str = "United States"
+    other_tax_country: str = ""                  # second / foreign country of tax residence
+    id_doc_type: str = "Driver's license"        # government photo ID used for documentary verification
+    id_doc_masked: str = ""
+    id_doc_issuer: str = ""                      # issuing state or country
+    id_doc_expiry: str = ""                      # ISO date; must be unexpired
+    joint_owner: dict = field(default_factory=dict)        # name, dob, tin_masked, tin_valid, tenancy, address_same, address
+    entity: dict = field(default_factory=dict)             # legal_name, kind, ein_masked, ein_valid, formed_in, business,
+                                                           # exempt, documents, certified
+    beneficial_owners: list = field(default_factory=list)  # dicts: name, role, pct, dob, address, id_last4
+    ira_beneficiary: str = ""
+    # ---- customer due diligence: nature and purpose of the relationship, expected activity
+    account_purpose: str = "Retirement and long-term investing"
+    industry: str = "None of these"              # higher-risk occupation / industry, if any
+    source_of_funds: str = "ACH from a bank account in the applicant's name"   # how the first deposit arrives
+    expected_annual_deposits: float = 0.0
+    expected_withdrawals: str = "Rarely (retirement or the goal date)"
+    foreign_wires_expected: bool = False
+    wire_countries: list = field(default_factory=list)
+    pep_type: str = "No"                         # senior foreign political figure / family / associate / domestic
+    bd_firm: str = ""                            # FINRA member the applicant (or spouse / dependent) is associated with
+    trusted_contact_info: str = ""               # phone or email of the trusted contact
+    # ---- tax certification, disclosures and signature
+    tax_cert_signed: bool = False                # W-9 (US person) or W-8BEN (foreign person) certification
+    backup_withholding: bool = False             # IRS has notified the applicant they are subject to it
+    cip_notice_ack: bool = False                 # CIP customer notice shown before opening
+    privacy_notice_ack: bool = False             # Regulation S-P initial privacy notice
+    esign_consent: bool = False                  # E-SIGN consent to electronic delivery
+    agreement_signed: bool = False               # advisory + account agreement (with arbitration disclosure)
+    signature_name: str = ""                     # typed signature
+    # ---- firm review (entered by the compliance desk, never by the applicant)
+    id_verification: str = "Verified: documentary"
+    id_theft_flags: list = field(default_factory=list)     # Regulation S-ID red flags raised by the verification vendor
+    id_theft_resolved: bool = False
+    ofac_hits: list = field(default_factory=list)          # potential matches from robo/sanctions.py (dicts)
+    ofac_disposition: str = "Not reviewed"
+    screening_source: str = ""                   # which list was screened and when
+    adverse_media: str = "No hits"
+    fincen_314a_match: bool = False
+    sow_documented: bool = False                 # source of wealth / funds documents received
+    edd_approver: str = ""
+    principal_approved: bool = False             # FINRA 4512(a)(1)(D): principal accepts the account
+    principal_name: str = ""
+    analyst: str = ""
 
 
 @dataclass
@@ -200,8 +263,9 @@ class ClientProfile:
 
     @property
     def is_qualified_client(self) -> bool:
-        """Advisers Act Rule 205-3: $2.2M net worth (performance fees allowed)."""
-        return self.finances.net_worth_ex_home >= 2_200_000
+        """Advisers Act Rule 205-3: $2.7M net worth since 29 June 2026 (SEC Rel. IA-6961; was $2.2M).
+        Performance fees are allowed only for qualified clients."""
+        return self.finances.net_worth_ex_home >= 2_700_000
 
     @property
     def is_senior(self) -> bool:
@@ -220,43 +284,18 @@ class ClientProfile:
         return max((today.year - d.year) * 12 + today.month - d.month, 0)
 
     def kyc_status(self) -> tuple[str, list[str]]:
-        """Account-opening gate.
+        """Account-opening gate (the rules are in robo/aml.py: account_gate).
 
-        'blocked'  the account cannot be opened (CIP failed, sanctions hit, beneficial owners unknown)
-        'hold'     the profile and risk analysis can be shown, but no trades until compliance clears it
-                   (PEP without EDD sign-off, high-risk source of wealth, non-documentary pending)
-        'cleared'  normal processing
+        'blocked'     the account cannot be opened (identity could not be verified, sanctions hit or
+                      sanctioned jurisdiction, a minor, beneficial owners unverified)
+        'incomplete'  the application is not in good order: a required item is missing. Only raised
+                      when the profile comes from the intake form (identity.enforce_intake)
+        'hold'        the profile and risk analysis can be shown, but no trades until compliance clears it
+                      (potential list match, PEP without EDD sign-off, high-risk source of wealth, ...)
+        'cleared'     normal processing
         """
-        i = self.identity
-        why = []
-        status = "cleared"
-        if not i.identity_verified or i.id_method == "pending":
-            status = "blocked"; why.append("Identity not verified (CIP, 31 CFR 1023.220): no account until documentary "
-                                           "or non-documentary verification is complete.")
-        if not i.ofac_clear:
-            status = "blocked"; why.append("Sanctions screening hit (OFAC): account opening is prohibited; the match must "
-                                           "be cleared or the SAR/blocking process followed.")
-        if i.account_type in ("trust", "LLC / corporation") and not i.beneficial_owners_verified:
-            status = "blocked"; why.append("Legal-entity account without verified beneficial owners (FinCEN CDD rule, "
-                                           "31 CFR 1010.230).")
-        if status == "blocked":
-            return status, why
-        if i.politically_exposed and not i.edd_cleared:
-            status = "hold"; why.append("Politically exposed person: enhanced due diligence and senior-management "
-                                        "approval required before the account is funded.")
-        if i.source_of_wealth in ("crypto or trading gains", "legal settlement", "other"):
-            status = "hold"; why.append(f"Source of wealth '{i.source_of_wealth}' is higher risk under the bank's "
-                                        "customer risk rating: document the source of funds before trading.")
-        if i.citizenship == "Non-resident alien" and i.tax_residency == "US only":
-            status = "hold"; why.append("Non-resident alien with US-only tax residency is inconsistent: collect W-8BEN "
-                                        "and the country of tax residence (FATCA/CRS).")
-        if self.is_senior and not i.trusted_contact and not i.trusted_contact_declined:
-            why.append("Specified adult without a trusted contact on file: FINRA 4512 requires a reasonable effort to "
-                       "obtain one (does not block the account).")
-        if self.profile_age_months > PROFILE_MAX_AGE_MONTHS:
-            status = "hold"; why.append(f"Investment profile is {self.profile_age_months} months old: refresh before "
-                                        f"relying on it (SEC Rule 17a-3: {PROFILE_MAX_AGE_MONTHS}-month cycle).")
-        return status, why
+        from .aml import account_gate
+        return account_gate(self)
 
 
 # ---------------------------------------------------------------- risk tolerance questionnaire

@@ -239,6 +239,72 @@ div[data-baseweb="slider"] [role="slider"]{box-shadow:0 0 0 4px rgba(14,107,82,.
 .split-row{display:flex; justify-content:space-between; font-size:.83rem; color:var(--ink2); border-bottom:1px solid var(--hair2); padding-bottom:.3rem;}
 .split-row i{display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:.45rem;}
 .split-row b{font-family:var(--mono); font-weight:500; color:var(--ink);}
+
+/* ---------- intake: part headers, application status, field groups ---------- */
+.part{display:flex; align-items:baseline; gap:.8rem; margin:1.3rem 0 .2rem;}
+.part-k{font-family:var(--mono); font-size:.68rem; letter-spacing:.16em; text-transform:uppercase; color:#fff; background:var(--ink);
+  border-radius:6px; padding:.2rem .55rem; white-space:nowrap;}
+.part h4{font-family:var(--serif); font-weight:400; font-size:1.3rem; margin:0; color:var(--ink);}
+.part p{color:var(--muted); margin:0; font-size:.86rem;}
+.grp{font-family:var(--mono); font-size:.64rem; letter-spacing:.16em; text-transform:uppercase; color:var(--green); margin:.7rem 0 -.1rem;
+  padding-top:.7rem; border-top:1px dashed var(--hair);}
+.grp.first{border-top:none; padding-top:0; margin-top:.2rem;}
+.appst{background:var(--card); border:1px solid var(--hair); border-left:4px solid var(--tone); border-radius:12px; padding:.9rem 1.1rem 1rem;
+  box-shadow:var(--shadow); margin:.5rem 0 .2rem;}
+.appst-h{display:flex; align-items:center; gap:.8rem; flex-wrap:wrap;}
+.appst-b{font-family:var(--mono); font-size:.68rem; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:#fff; background:var(--tone);
+  border-radius:999px; padding:.3rem .8rem; white-space:nowrap;}
+.appst-t{font-family:var(--serif); font-size:1.25rem; color:var(--ink);}
+.appst-s{font-size:.86rem; color:var(--ink2); margin:.35rem 0 .1rem; max-width:90ch;}
+.appst-steps{display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.7rem;}
+.stepchip{font-size:.76rem; color:var(--ink2); border:1px solid var(--hair); border-radius:999px; padding:.22rem .7rem .22rem .5rem; background:var(--paper);
+  display:inline-flex; align-items:center; gap:.4rem;}
+.stepchip i{width:16px; height:16px; border-radius:50%; background:var(--tone); color:#fff; font-style:normal; font-size:.62rem; font-weight:700;
+  display:inline-flex; align-items:center; justify-content:center;}
+.appst-list{margin:.7rem 0 0; padding:0; list-style:none; display:grid; grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); gap:.3rem 1.4rem;}
+.appst-list li{font-size:.84rem; color:var(--ink2); padding-left:1.05rem; position:relative; line-height:1.45;}
+.appst-list li:before{content:""; position:absolute; left:0; top:.52em; width:6px; height:6px; border-radius:50%; background:var(--tone);}
+.appst-list li b{font-weight:600; color:var(--ink);}
+.appst-list.one{grid-template-columns:1fr; margin-top:.3rem;}
+.appst-groups{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:.9rem 1.6rem; margin-top:.8rem; padding-top:.8rem;
+  border-top:1px dashed var(--hair);}
+.appst-g{font-family:var(--mono); font-size:.62rem; letter-spacing:.14em; text-transform:uppercase; color:var(--tone);}
+
+/* ---------- customer risk rating ---------- */
+.rr-track{position:relative; height:10px; border-radius:999px; display:flex; gap:2px; margin:.5rem 0 .3rem;}
+.rr-track .z{height:100%;}
+.rr-scale{display:flex; justify-content:space-between; font-family:var(--mono); font-size:.64rem; color:var(--muted);}
+
+/* ---------- audit log ---------- */
+.log{background:var(--card); border:1px solid var(--hair); border-radius:12px; overflow:hidden; box-shadow:var(--shadow);}
+.log-head, .log summary{display:grid; grid-template-columns:28px 148px 86px minmax(0,1.1fr) 92px minmax(0,1.5fr); gap:.7rem; padding:.5rem 1rem; align-items:baseline;}
+.log-head{font-family:var(--mono); font-size:.6rem; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); border-bottom:1px solid var(--hair);
+  background:var(--paper);}
+.log details{border-top:1px solid var(--hair2);}
+.log details:first-of-type{border-top:none;}
+.log summary{cursor:pointer; list-style:none; font-size:.83rem; color:var(--ink2); transition:background .12s ease;}
+.log summary::-webkit-details-marker{display:none;}
+.log summary:hover{background:var(--paper);}
+.log details[open] summary{background:var(--paper);}
+.log-n, .log-t, .log-c{font-family:var(--mono); font-size:.7rem; color:var(--muted); white-space:nowrap;}
+.log-c{color:var(--ink); font-weight:500;}
+.log-k{font-weight:600; color:var(--ink);}
+.log-e{color:var(--ink2); font-size:.8rem; overflow-wrap:anywhere;}
+.log-r{font-family:var(--mono); font-size:.62rem; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:#fff; background:var(--tone);
+  border-radius:5px; padding:.14rem .45rem; justify-self:start; white-space:nowrap;}
+.log-body{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.7rem 1.6rem; padding:.3rem 1rem 1rem 3.2rem; background:var(--paper);}
+.log-body div{font-size:.83rem; color:var(--ink2); line-height:1.5;}
+.log-body b{display:block; font-family:var(--mono); font-size:.6rem; letter-spacing:.14em; text-transform:uppercase; color:var(--green); font-weight:500; margin-bottom:.15rem;}
+.log-body .now{grid-column:1 / -1; background:var(--card); border:1px solid var(--hair); border-left:3px solid var(--tone); border-radius:8px; padding:.55rem .8rem;}
+.log-body .now b{color:var(--tone);}
+.log-body .log-evm{display:none;}
+@media (max-width:900px){
+  .log-head{display:none;}
+  .log summary{grid-template-columns:28px 86px 1fr 92px;} .log-t, .log-e{display:none;}
+  .log-body{grid-template-columns:1fr; padding-left:1rem;} .log-body .log-evm{display:block;}
+}
+.legend{display:flex; flex-wrap:wrap; gap:.5rem 1.2rem; font-size:.8rem; color:var(--ink2); margin:.2rem 0 .5rem;}
+.legend span{display:inline-flex; align-items:center; gap:.4rem;}
 .foot{margin-top:2.5rem; padding-top:1.1rem; border-top:1px solid var(--hair); display:flex; justify-content:space-between; gap:2rem; flex-wrap:wrap;
   font-size:.78rem; color:var(--muted);}
 .foot b{font-family:var(--serif); font-size:1.1rem; color:var(--ink); font-weight:400;}
@@ -484,6 +550,78 @@ def badge(text: str, tone: str = "info") -> str:
 
 def html_block(s: str) -> None:
     st.html(s)
+
+
+# ============================================================================ intake and compliance file
+STATUS_TONE = {"cleared": GREEN, "hold": AMBER, "incomplete": NAVY, "blocked": RED}
+RESULT_TONE = {"PASS": GREEN, "INFO": SLATE, "REVIEW": AMBER, "FAIL": RED, "OPEN": NAVY}
+
+
+def part(key: str, title: str, lede: str = "") -> None:
+    """Header for one part of the intake (A. Account application, B. Investment profile, ...)."""
+    ld = f"<p>{md(lede)}</p>" if lede else ""
+    st.html(f'<div class="part"><span class="part-k">{esc(key)}</span><div><h4>{esc(title)}</h4>{ld}</div></div>')
+
+
+def group(label: str, first: bool = False) -> None:
+    """Small label that separates field groups inside one intake step."""
+    st.html(f'<div class="grp{" first" if first else ""}">{esc(label)}</div>')
+
+
+def application_status(status: str, badge_text: str, title: str, summary: str, step_status: list[tuple[str, int]],
+                       items: list[str] | dict[str, list[str]]) -> None:
+    """Banner under the application: overall decision, per-step completeness and what is outstanding."""
+    tone = STATUS_TONE.get(status, NAVY)
+    chips = "".join(f'<span class="stepchip" style="--tone:{GREEN if n == 0 else AMBER}"><i>{"&#10003;" if n == 0 else n}</i>'
+                    f'{esc(name)}</span>' for name, n in step_status)
+    if isinstance(items, dict):         # outstanding items grouped by intake step
+        lst = '<div class="appst-groups">' + "".join(
+            f'<div><div class="appst-g">{esc(step)}</div><ul class="appst-list one">' + "".join(f"<li>{md(t)}</li>" for t in ts)
+            + "</ul></div>" for step, ts in items.items() if ts) + "</div>"
+    else:
+        lst = ('<ul class="appst-list">' + "".join(f"<li>{md(t)}</li>" for t in items) + "</ul>") if items else ""
+    st.html(f'<div class="appst" style="--tone:{tone}"><div class="appst-h"><span class="appst-b">{esc(badge_text)}</span>'
+            f'<span class="appst-t">{esc(title)}</span></div><p class="appst-s">{md(summary)}</p>'
+            f'<div class="appst-steps">{chips}</div>{lst}</div>')
+
+
+def risk_rating(score: int, level: str, cap: int = 100) -> None:
+    """Customer AML risk rating on a low / medium / high track."""
+    pos = max(1.0, min(99.0, 100.0 * score / cap))
+    st.html(f'<div class="rr-track"><span class="z z3" style="width:30%;border-radius:999px 0 0 999px"></span>'
+            f'<span class="z z2" style="width:30%"></span><span class="z z1" style="width:40%;border-radius:0 999px 999px 0"></span>'
+            f'<span class="needle" style="left:{pos:.1f}%"></span></div>'
+            f'<div class="rr-scale"><span>0 · low</span><span>30 · medium</span><span>60 · high</span><span>{cap}</span></div>')
+
+
+def log_lines(lines: list[dict], open_all: bool = False) -> None:
+    """Audit log. Each line is a row that opens to its practitioner instructions.
+
+    A line is a dict with: seq, time, code, check, result (PASS/INFO/REVIEW/FAIL/OPEN), evidence,
+    and the guide fields what, rule, action (what to do for this result), retain.
+    """
+    head = ('<div class="log-head"><span>#</span><span>Time (UTC)</span><span>Code</span><span>Check</span>'
+            '<span>Result</span><span>Evidence</span></div>')
+    out = []
+    for ln in lines:
+        tone = RESULT_TONE.get(ln["result"], SLATE)
+        out.append(
+            f'<details{" open" if open_all else ""}><summary><span class="log-n">{ln["seq"]:02d}</span>'
+            f'<span class="log-t">{esc(ln["time"])}</span><span class="log-c">{esc(ln["code"])}</span>'
+            f'<span class="log-k">{esc(ln["check"])}</span><span class="log-r" style="--tone:{tone}">{esc(ln["result"])}</span>'
+            f'<span class="log-e">{md(ln["evidence"])}</span></summary>'
+            f'<div class="log-body"><div class="now" style="--tone:{tone}"><b>What to do now · result {esc(ln["result"])}</b>{md(ln["action"])}</div>'
+            f'<div class="log-evm"><b>Evidence</b>{md(ln["evidence"])}</div>'
+            f'<div><b>What this line records</b>{md(ln["what"])}</div>'
+            f'<div><b>Rule it evidences</b>{md(ln["rule"])}</div>'
+            f'<div><b>Who acts</b>{md(ln["owner"])}</div>'
+            f'<div><b>Keep on file</b>{md(ln["retain"])}</div></div></details>')
+    st.html(f'<div class="log">{head}{"".join(out)}</div>')
+
+
+def result_legend(items: list[tuple[str, str]]) -> None:
+    st.html('<div class="legend">' + "".join(
+        f'<span><span class="log-r" style="--tone:{RESULT_TONE.get(k, SLATE)}">{esc(k)}</span>{esc(v)}</span>' for k, v in items) + "</div>")
 
 
 def eyebrow(text: str) -> None:

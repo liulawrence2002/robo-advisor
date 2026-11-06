@@ -14,8 +14,9 @@ Futures eligibility follows NFA Rule 2-30 (collect age, income, net worth, exper
 deliver the CFTC Rule 1.55 risk disclosure) plus house thresholds. The robo uses futures
 only to hedge existing equity exposure, never to speculate or add leverage.
 
-Account gating: a failed CIP/OFAC check blocks the account; a PEP without EDD sign-off or
-a high-risk source of wealth puts trading on hold. Insiders (Rule 144 control persons) are
+Account gating (robo/aml.py): a failed CIP/OFAC check blocks the account; an application with
+missing items is a proposal only; a PEP without EDD sign-off, an undispositioned list match
+or a high-risk source of wealth puts trading on hold. Insiders (Rule 144 control persons) are
 not offered hedges on their employer's stock unless the issuer permits hedging; they get a
 Rule 10b5-1 staged-sale plan instead.
 """
@@ -127,7 +128,7 @@ def eligibility(p: ClientProfile, rp: RiskProfile) -> Eligibility:
         notes.append("Politically exposed person" + (f" ({i.pep_detail})" if i.pep_detail else "") + ": enhanced due "
                      "diligence " + ("completed and approved." if i.edd_cleared else "pending senior-management approval."))
     if i.tax_residency != "US only" or i.citizenship == "Non-resident alien":
-        notes.append("Non-US tax residency: W-8BEN/CRS self-certification, 30% (or treaty) withholding on US dividends, "
+        notes.append("Non-US tax residency: Form W-8BEN (renewed every three years), 30% (or treaty) withholding on US dividends, "
                      "US estate-tax exposure on US-situs assets above $60,000; IRA/Roth contributions need US earned income.")
     if i.account_type in ("trust", "LLC / corporation"):
         notes.append(f"{i.account_type.capitalize()} account: beneficial owners "
@@ -229,7 +230,7 @@ def recommend_overlays(p: ClientProfile, rp: RiskProfile, el: Eligibility, m: Ma
     ovs, why, skip = [], [], []
     fut = None
     if el.kyc_status != "cleared":
-        skip.append("No derivatives while the account is on hold or blocked.")
+        skip.append("No derivatives until the account is approved (it is on hold, incomplete or declined).")
         return OverlayPlan([], why, None, skip)
 
     ssc, plan, why_c = concentrated_stock_plan(p, el, m, stock_vol, stock_info)
@@ -299,12 +300,19 @@ def reg_bi_checklist(p: ClientProfile, rp: RiskProfile, el: Eligibility, fee_tot
     return [
         ("Investment profile complete (FINRA 2111 / Reg BI)", rp.n_answered >= 8 and bool(p.goals),
          f"{rp.n_answered}/10 risk items answered; {len(p.goals)} goal(s); finances, tax status, horizon, liquidity collected"),
-        ("Identity verified (CIP) and OFAC screened", el.kyc_status != "blocked",
+        ("Identity verified (CIP) and OFAC screened",
+         el.kyc_status in ("cleared", "hold") and i.id_method != "pending"
+         and not (i.ofac_hits and i.ofac_disposition == "Not reviewed"),
          f"CIP {i.id_method}; OFAC {'clear' if i.ofac_clear else 'HIT'}; status: {el.kyc_status}"),
         ("Customer due diligence (source of wealth, PEP, beneficial owners)", el.kyc_status == "cleared",
          f"source of wealth: {i.source_of_wealth}; PEP: {'yes' if i.politically_exposed else 'no'}"),
         ("Trusted contact requested (FINRA 4512)", bool(i.trusted_contact) or i.trusted_contact_declined,
          i.trusted_contact or ("declined" if i.trusted_contact_declined else "missing")),
+        ("Tax certification and disclosures signed (W-9 / W-8BEN, privacy, e-delivery, agreement)",
+         not i.enforce_intake or (i.tax_cert_signed and i.privacy_notice_ack and i.esign_consent and i.agreement_signed
+                                  and bool(i.signature_name)),
+         (f"signed '{i.signature_name}'" if i.signature_name else "legacy record on file") if not i.enforce_intake or i.agreement_signed
+         else "outstanding: see the application status"),
         ("Profile current (SEC 17a-3: 36-month refresh)", months <= 36,
          f"confirmed {months} month(s) ago" if i.profile_date else "confirmed today"),
         ("Risk answers consistent, or reviewed", not rp.review_flags,

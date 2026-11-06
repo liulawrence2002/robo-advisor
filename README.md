@@ -15,13 +15,19 @@ streamlit run app.py          # opens http://localhost:8501
 
 Live data (S&P 500, VIX term structure, Treasury yields, ETF prices, option chains, stock fundamentals, FRED, Treasury
 curves, Shiller CAPE, Damodaran ERP, CBOE put/call, CNN Fear & Greed) is fetched without API keys. If a source is
-unavailable, or **Live market data** is off in the sidebar, the app uses a committed snapshot.
+unavailable, or **Live market data** is off at the top of the page, the app uses a committed snapshot.
 
 ## What it does
 
-- **Open the account:** identity verification (CIP), OFAC screening, account registration and beneficial owners,
-  source of wealth, politically exposed persons with enhanced due diligence, FATCA/CRS tax residency, trusted contact,
-  36-month profile refresh. A failed check blocks the account; a pending review holds trading.
+- **Open the account:** a four-step application (applicant, account & funding, regulatory questions, agreements &
+  signature) collects what the Customer Identification Program and customer due diligence rules require: legal name,
+  date of birth, street address, a validated SSN/ITIN (stored masked), photo ID, joint owners, trusts and legal entities
+  with beneficial owners, source of wealth and funds, expected activity, tax certification, affiliations, political
+  exposure, trusted contact, disclosures and a signature. A firm-review panel records identity verification, red flags,
+  list-match disposition, enhanced due diligence and a principal's acceptance. Every name is screened against the live
+  OFAC SDN list, and a customer AML risk rating sets the review cycle. The account ends up Approved, Pending review,
+  Information needed (the plan is a proposal only) or Declined. Never enter a real Social Security number: use the
+  sample 987-65-4321.
 - **Know the client:** the FINRA 2111 / Reg BI investment profile, experience by product (FINRA 2360), disclosures,
   insider status (Rule 144 / 10b5-1), a 10-question risk questionnaire and an income-gamble ladder, with consistency
   checks on contradictory answers and a client override that is honoured only when more conservative.
@@ -43,8 +49,9 @@ unavailable, or **Live market data** is off in the sidebar, the app uses a commi
 - **Markets & valuation:** Shiller CAPE building blocks, excess CAPE yield, Fed model, Buffett indicator, implied equity
   risk premium, Treasury par and real curves, breakevens, credit spreads, VIX term structure, SKEW, put/call ratios and
   sentiment, with a bounded valuation tilt shown next to the J.P. Morgan anchor.
-- **Compliance:** a Reg BI checklist with evidence, reasonably-available-alternatives comparison, account notes, a JSON
-  audit record and a downloadable client report (investment policy statement).
+- **Compliance:** the know-your-customer record, the AML risk-rating factors, a Reg BI checklist with evidence, and an
+  audit log with one line per control. Click a line to read its instructions: what to do now, what it records, the
+  rule, who acts and how long the record is kept. Downloads: JSON audit record, the log as CSV, and a client report.
 
 ## Three sample clients
 
@@ -64,7 +71,10 @@ and editable in the app.
 |---|---|
 | `app.py` | Streamlit front end, one scrolling page: client switcher and settings at the top, hero, then Profile, Plan, Risk, Portfolio, Projections, Options & futures, Markets & valuation, Compliance, Compare, Methodology |
 | `ui.py`, `.streamlit/config.toml` | Visual system: single-scroll editorial layout, fonts, card and chart components, a small page script for the section highlight and scroll progress |
-| `robo/kyc.py` | Client data model, account gate, risk questionnaire, consistency checks |
+| `robo/kyc.py` | Client data model, risk questionnaire, consistency checks |
+| `robo/aml.py` | Application completeness, customer AML risk rating, account gate, monitoring triggers |
+| `robo/sanctions.py` | OFAC SDN list download and fuzzy name screening |
+| `robo/audit.py` | Audit log and the practitioner instructions for every line |
 | `robo/risk.py` | Willingness, ability and need; stress-loss cap; capacity score; client override; glide path |
 | `robo/portfolio.py` | Model portfolios by resampled mean-variance optimization |
 | `robo/goals.py` | Cash-flow schedule, planning horizon, Social Security, per-goal equity rules |
@@ -86,6 +96,7 @@ and editable in the app.
 - **Volatility and correlations:** J.P. Morgan where published; otherwise 200 months of ETF history (2010-2026).
 - **Rules:** 2026 IRS limits and brackets; SSA 2026 bend points and COLA; 2026 Social Security Trustees Report; SSA 2022
   period life table; IRS Uniform Lifetime Table; SECURE 2.0 RMD ages; FINRA 2111/2360/4512/2165; Reg BI; SEC IM 2017-02.
-- **Live inputs:** Yahoo Finance (yfinance), FRED, U.S. Treasury, multpl.com, Damodaran (NYU Stern), CBOE, CNN.
+- **Live inputs:** Yahoo Finance (yfinance), FRED, U.S. Treasury, multpl.com, Damodaran (NYU Stern), CBOE, CNN; OFAC SDN list.
+- **Account-opening rules:** 31 CFR 1023.220, 1010.230, 1023.210, 1023.320; OFAC 31 CFR 501; Reg S-ID; Reg S-P; FINRA 4512, 3310.
 
 *Educational project, not investment advice.*

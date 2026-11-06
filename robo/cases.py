@@ -1,16 +1,46 @@
 """The three assignment clients. The assignment fixes age and the headline facts; every
-other number below is an explicit, documented assumption (shown in the app and paper)."""
+other number below is an explicit, documented assumption (shown in the app and paper).
+
+Each case also carries a complete, fictional account application (name, date of birth, address,
+masked sample SSN from the 987-65-432x advertising range, ID document, disclosures, signature and
+the firm's review results) so it passes the account gate the same way a real approved client would.
+"""
 from __future__ import annotations
 
+from datetime import date
+
 from .kyc import ClientProfile, Experience, Finances, Goal, Household, Identity, answers_from_labels
+
+
+def _dob(age: int, month: int, day: int) -> str:
+    """A date of birth that makes the client exactly `age` today, so the cases do not drift with the calendar."""
+    t = date.today()
+    return date(t.year - age - ((t.month, t.day) < (month, day)), month, day).isoformat()
+
+
+def _application(last4: str, phone: str, email: str, street: str, city: str, zip_: str, id_state: str) -> dict:
+    """Application fields every approved sample client has: valid sample SSN, unexpired driver's license,
+    disclosures acknowledged, tax certification signed, identity verified and a principal's acceptance."""
+    return dict(enforce_intake=True, tin_type="SSN", tin_masked=f"XXX-XX-{last4}", tin_valid=True,
+                address_line=street, address_city=city, address_zip=zip_, phone=phone, email=email,
+                id_doc_type="Driver's license", id_doc_masked=f"XXXX{last4}", id_doc_issuer=id_state,
+                id_doc_expiry=date(date.today().year + 3, 6, 30).isoformat(),
+                tax_cert_signed=True, cip_notice_ack=True, privacy_notice_ack=True, esign_consent=True,
+                agreement_signed=True, id_verification="Verified: documentary", principal_approved=True,
+                principal_name="D. Ramirez (Series 24)", analyst="K. Osei (AML analyst)")
 
 
 def case_a() -> ClientProfile:
     """(a) 30-year-old saver: buy a house in 2 years, retire in 35 years."""
     return ClientProfile(
         label="A: 30-year-old saver (house in 2 yrs, retire in 35)",
-        identity=Identity(full_name="Case A (age 30)", occupation="Financial analyst", employer="Regional bank",
-                          state="NY", trusted_contact="Parent (on file)", expected_initial_funding=35_000),
+        identity=Identity(full_name="Maya R. Thompson", occupation="Financial analyst", employer="Hudson Valley Bank",
+                          state="NY", trusted_contact="Linda Thompson (mother)", trusted_contact_info="(518) 555-0117",
+                          expected_initial_funding=35_000, expected_annual_deposits=14_000,
+                          date_of_birth=_dob(30, 4, 18), signature_name="Maya R. Thompson",
+                          account_purpose="Saving for a goal (home, education)",
+                          **_application("4321", "(718) 555-0142", "maya.thompson@example.com",
+                                         "214 Clinton Street, Apt 3B", "Brooklyn", "11201", "NY")),
         household=Household(age=30, sex="female", health="good", marital_status="single", life_insured=False),
         finances=Finances(
             annual_income=95_000, income_real_growth=0.015, income_stability="stable",
@@ -37,8 +67,13 @@ def case_b() -> ClientProfile:
     """(b) 55-year-old retirement investor with $200K saved."""
     return ClientProfile(
         label="B: 55-year-old with $200K saved",
-        identity=Identity(full_name="Case B (age 55)", occupation="Operations manager", employer="Manufacturing company",
-                          state="OH", trusted_contact="Sibling (on file)", expected_initial_funding=25_000),
+        identity=Identity(full_name="Daniel J. Kowalski", occupation="Operations manager", employer="Buckeye Precision Parts",
+                          state="OH", trusted_contact="Anna Kowalski (sister)", trusted_contact_info="(614) 555-0188",
+                          expected_initial_funding=25_000, expected_annual_deposits=11_000,
+                          date_of_birth=_dob(55, 8, 23), signature_name="Daniel J. Kowalski",
+                          source_of_funds="Transfer from another brokerage (ACATS)",
+                          **_application("4323", "(614) 555-0163", "dan.kowalski@example.com",
+                                         "1847 Maple Ridge Drive", "Columbus", "43215", "OH")),
         household=Household(age=55, sex="male", health="average", marital_status="divorced"),
         finances=Finances(
             annual_income=110_000, income_real_growth=0.0, income_stability="stable",
@@ -63,10 +98,19 @@ def case_c() -> ClientProfile:
     """(c) 70-year-old retiree with $2 million saved."""
     return ClientProfile(
         label="C: 70-year-old retiree with $2M",
-        identity=Identity(full_name="Case C (age 70)", employment_status="retired", occupation="Retired engineer",
+        identity=Identity(full_name="Walter E. Brandt", employment_status="retired", occupation="Retired engineer",
                           employer="Honeywell (former)", account_type="joint", state="FL",
-                          trusted_contact="Adult child (on file)", power_of_attorney="Spouse (durable POA)",
-                          source_of_wealth="salary and savings", expected_initial_funding=2_000_000),
+                          trusted_contact="Karen Brandt-Lee (daughter)", trusted_contact_info="(239) 555-0171",
+                          power_of_attorney="Spouse (durable POA)",
+                          source_of_wealth="salary and savings", expected_initial_funding=2_000_000,
+                          date_of_birth=_dob(70, 3, 30), signature_name="Walter E. Brandt",
+                          account_purpose="Income in retirement", expected_withdrawals="Monthly income",
+                          source_of_funds="Transfer from another brokerage (ACATS)",
+                          joint_owner={"name": "Helen M. Brandt", "dob": _dob(68, 7, 19), "tin_masked": "XXX-XX-4322",
+                                       "tin_valid": True, "tenancy": "Joint tenants with right of survivorship",
+                                       "address_same": True, "address": ""},
+                          **_application("4324", "(239) 555-0126", "walter.brandt@example.com",
+                                         "5120 Gulf Shore Boulevard N", "Naples", "34103", "FL")),
         household=Household(age=70, sex="male", health="good", marital_status="married",
                             spouse_age=68, spouse_sex="female", spouse_health="good", long_term_care_insured=False),
         finances=Finances(

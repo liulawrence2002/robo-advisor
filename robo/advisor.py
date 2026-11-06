@@ -339,6 +339,10 @@ def write_advice(r: Recommendation) -> list[str]:
                    " The analysis below is shown for the record only; nothing is implemented.")
     elif r.elig.kyc_status == "hold":
         out.append("**Trading on hold pending compliance.** " + " ".join(r.elig.kyc_reasons))
+    elif r.elig.kyc_status == "incomplete":
+        out.append(f"**Finish the account application.** This plan is a proposal: {len(r.elig.kyc_reasons)} item(s) are "
+                   "outstanding (identification, tax certification, disclosures or signature). Nothing is opened or "
+                   "traded, and no options or futures overlay is offered, until the application is approved.")
     emerg = f.cash / max(f.monthly_essential_expenses, 1)
     out.append(f"**Liquidity first.** Keep {_m(f.cash)} in bank cash outside the portfolio "
                f"({emerg:.1f} months of essential expenses; target 3-6)."
