@@ -1007,27 +1007,28 @@ else:
                          money(bk["Annual top-up"]) if bk["Annual top-up"] > 0 else "-", pct(bk["Equity now"]), bk["Model"]])
         ui.table(["Bucket", "Priority", "Years", "Target", "Funded today", "Top-up / yr", "Stocks", "Model"], rows,
                  num_cols={2, 3, 4, 5, 6})
-    c1, c2 = st.columns([1, 1.55], gap="large")
+    c1, c2 = st.columns([1, 1.7], gap="large")
     with c1, st.container(key="card_donut"):
         ui.eyebrow("Household allocation")
         ui.chart(donut(rec.weights_now, f"{rec.stats['equity']:.0%}<br><span style='font-size:11px'>stocks</span>",
-                       height=430, legend=False))
-        st.caption(f"2008-style year {rec.stress['2008 global financial crisis']:.1%} · 2022-style "
+                       height=620, legend=False))
+        st.caption(f"Stress test: 2008-style year {rec.stress['2008 global financial crisis']:.1%} · 2022-style "
                    f"{rec.stress['2022 stock-bond inflation shock']:.1%}")
     with c2, st.container(key="card_etfs"):
         ui.eyebrow("ETF implementation")
         if len(rec.implementation):
-            impl = rec.implementation.drop(columns=["Key"]).copy()
-            impl["Amount"] = impl["Amount"].map(lambda v: f"${v:,.0f}")
-            impl["Shares"] = impl["Shares"].map(lambda v: "" if pd.isna(v) else f"{v:,.0f}")
-            st.dataframe(impl, width="stretch", hide_index=True, height=430,
-                         column_config={"Weight": st.column_config.ProgressColumn("Weight", min_value=0, max_value=0.6, format="percent"),
-                                        "Price": st.column_config.NumberColumn(format="$%.2f"),
-                                        "Expense ratio": st.column_config.NumberColumn(format="percent")})
+            impl = rec.implementation.sort_values("Weight", ascending=False)
+            ui.etf_table([{"asset_class": r["Asset class"], "etf": r["ETF"], "alt": r["Alternative"], "weight": float(r["Weight"]),
+                           "amount": float(r["Amount"]), "price": None if pd.isna(r["Price"]) else float(r["Price"]),
+                           "shares": None if pd.isna(r["Shares"]) else float(r["Shares"]),
+                           "er": None if pd.isna(r["Expense ratio"]) else float(r["Expense ratio"])}
+                          for _, r in impl.iterrows()],
+                         total_amount=float(impl["Amount"].sum()), weighted_er=rec.stats["expense_ratio"])
         else:
             st.caption("Nothing to invest yet: the target mix is shown in the donut; the trade list appears once assets are funded.")
-        st.caption("The *Alternative* column is the tax-loss-harvesting pair: sell the primary ETF at a loss, hold the alternative "
-                   "for 31 days to avoid a wash sale, then switch back. Rebalance when a sleeve drifts 5 points or 25% from target.")
+        st.caption("The grey ticker is the tax-loss-harvesting pair: sell the primary ETF at a loss, hold the pair for 31 days "
+                   "to avoid a wash sale, then switch back. Shares are whole shares at the latest price. "
+                   "Rebalance when a sleeve drifts 5 points or 25% from target.")
     ui.subsection("Glide path", "How the retirement portfolio's mix changes with age. It comes from your own balance sheet, "
                   "is held steady around retirement (the sequence-of-returns window) and never rises again after that.")
     with st.container(key="card_glide"):

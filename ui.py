@@ -224,6 +224,21 @@ div[data-baseweb="slider"] [role="slider"]{box-shadow:0 0 0 4px rgba(14,107,82,.
 .tbl td{padding:.55rem .6rem; border-bottom:1px solid var(--hair2); color:var(--ink2); vertical-align:top;}
 .tbl td.num{font-family:var(--mono); text-align:right; color:var(--ink);}
 .tbl tr:last-child td{border-bottom:none;}
+.etf{width:100%; max-width:100%; border-collapse:collapse; font-size:.83rem; table-layout:auto;}
+.etf th{font-family:var(--mono); font-size:.6rem; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); text-align:left; font-weight:500;
+  padding:.45rem .4rem; border-bottom:1px solid var(--hair); white-space:nowrap;}
+.etf th:first-child, .etf td:first-child{padding-left:0;} .etf th:last-child, .etf td:last-child{padding-right:0;}
+.etf td{padding:.4rem .4rem; border-bottom:1px solid var(--hair2); color:var(--ink2); vertical-align:middle; white-space:nowrap;}
+.etf th.num, .etf td.num{text-align:right;} .etf td.num{font-family:var(--mono); color:var(--ink); font-size:.78rem;}
+.etf td.cls{white-space:normal; min-width:7.5rem; line-height:1.3;}
+.etf .tk{font-family:var(--mono); font-weight:600; color:var(--ink);} .etf .alt{font-family:var(--mono); color:var(--muted); font-size:.72rem;}
+.etf .alt::before{content:"/ "; color:var(--hair);}
+.etf .w{display:flex; align-items:center; justify-content:flex-end; gap:.45rem;}
+.etf .wbar{width:56px; height:6px; border-radius:3px; background:var(--hair2); overflow:hidden; flex:none;}
+.etf .wbar i{display:block; height:100%; background:var(--green); border-radius:3px;}
+.etf tfoot td{border-top:1px solid var(--hair); border-bottom:none; font-weight:600; color:var(--ink); padding-top:.55rem;}
+.etf tfoot td.num{font-weight:600;}
+@media (max-width:900px){.etf .wbar{display:none;} .etf .er, .etf .sh{display:none;}}
 .steps{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.6rem;}
 @media (max-width:1000px){.steps{grid-template-columns:repeat(2,minmax(0,1fr));}}
 @media (max-width:640px){.steps{grid-template-columns:1fr;}}
@@ -536,6 +551,29 @@ def table(headers: list[str], rows: list[list], num_cols: set[int] | None = None
     body = "".join("<tr>" + "".join(f'<td class="{"num" if i in num_cols else ""}">{md(c)}</td>' for i, c in enumerate(r)) + "</tr>"
                    for r in rows)
     st.html(f'<table class="tbl"><thead><tr>{th}</tr></thead><tbody>{body}</tbody></table>')
+
+
+def etf_table(rows: list[dict], total_amount: float, weighted_er: float) -> None:
+    """Trade list that fits its card: ticker with its harvesting pair, inline weight bar, totals row, no scrolling.
+    Each row: asset_class, etf, alt, weight (0-1), amount, price, shares (None ok), er (None ok)."""
+    cap = max((r["weight"] for r in rows), default=1.0) or 1.0
+    body = []
+    for r in rows:
+        bar = f'<span class="wbar"><i style="width:{min(r["weight"] / cap, 1.0):.0%}"></i></span>'
+        sh = "" if r.get("shares") is None else f'{r["shares"]:,.0f}'
+        er = "" if r.get("er") is None else f'{r["er"]:.2%}'
+        px = "" if r.get("price") is None else f'${r["price"]:,.2f}'
+        body.append(f'<tr><td class="cls">{esc(r["asset_class"])}</td>'
+                    f'<td><span class="tk">{esc(r["etf"])}</span> <span class="alt">{esc(r["alt"])}</span></td>'
+                    f'<td class="num"><span class="w">{bar}<span>{r["weight"]:.1%}</span></span></td>'
+                    f'<td class="num">${r["amount"]:,.0f}</td><td class="num sh">{sh}</td>'
+                    f'<td class="num">{px}</td><td class="num er">{er}</td></tr>')
+    st.html(f'<table class="etf"><thead><tr><th>Asset class</th><th>ETF / harvest pair</th><th class="num">Weight</th>'
+            f'<th class="num">Amount</th><th class="num sh">Shares</th><th class="num">Price</th><th class="num er">Exp. ratio</th></tr></thead>'
+            f'<tbody>{"".join(body)}</tbody>'
+            f'<tfoot><tr><td class="cls">Total</td><td>{len(rows)} ETFs</td><td class="num">100.0%</td>'
+            f'<td class="num">${total_amount:,.0f}</td><td class="num sh"></td><td class="num"></td>'
+            f'<td class="num er">{weighted_er:.2%}</td></tr></tfoot></table>')
 
 
 def steps(items: list[tuple[str, str]]) -> None:
